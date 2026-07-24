@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
-import { campaignCompanies, companies, contacts, owners } from "@/lib/db/schema";
+import { campaignCompanies, companies, contacts, owners, syncRuns } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 import {
   batchReadAssociations,
   batchReadObjects,
@@ -65,7 +66,7 @@ function inferGenuineReply(props: ContactSequenceProps): boolean {
   return true;
 }
 
-export async function runSync() {
+export async function runSync(options?: { campaignIds?: number[] }) {
   const dispositionOptions = await getCallDispositionOptions().catch(() => []);
   const dispositionClass = new Map(
     dispositionOptions.map((o) => [o.value, classifyDispositionLabel(o.label)]),
@@ -84,7 +85,11 @@ export async function runSync() {
   }
 
   const authorityKeywords = await getAuthorityKeywords();
-  const allCampaigns = await db.query.campaigns.findMany();
+  const allCampaigns = options?.campaignIds
+    ? await db.query.campaigns.findMany({
+        where: (c, { inArray }) => inArray(c.id, options.campaignIds!),
+      })
+    : await db.query.campaigns.findMany();
 
   // One campaign failing (bad list ID, a transient HubSpot error, etc.) must
   // not prevent every other campaign from syncing — isolate failures per
@@ -319,5 +324,35 @@ async function syncCampaign(
     } catch (err) {
       console.error(`[sync] campaign_companies upsert failed for company ${companyId}, skipping:`, err);
     }
+  }
+}
+
+// Shared entry point for both the cron-triggered route and any in-app manual
+// trigger — records a `sync_runs` row so "last synced" / error state on the
+// dashboard reflects every run consistently, regardless of who/what kicked it off.
+export async function runSyncJob(options?: { campaignIds?: number[] }) {
+  const [run] = await db.insert(syncRuns).values({ status: "running" }).returning();
+
+  try {
+    const result = await runSync(options);
+    const hasFailures = result.failed.length > 0;
+    await db
+      .update(syncRuns)
+      .set({
+        status: hasFailures ? "error" : "success",
+        errorMessage: hasFailures
+          ? result.failed.map((f) => `${f.name} (#${f.campaignId}): ${f.error}`).join("; ")
+          : null,
+        finishedAt: new Date(),
+      })
+      .where(eq(syncRuns.id, run.id));
+    return { ok: !hasFailures, syncRunId: run.id, ...result };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await db
+      .update(syncRuns)
+      .set({ status: "error", errorMessage: message, finishedAt: new Date() })
+      .where(eq(syncRuns.id, run.id));
+    return { ok: false, syncRunId: run.id, error: message };
   }
 }

@@ -5,6 +5,18 @@ import { db } from "@/lib/db";
 import { campaigns } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { setAuthorityKeywords } from "@/lib/authority";
+import { runSyncJob } from "@/lib/sync";
+
+// Best-effort — a campaign save should never fail just because the
+// immediately-following sync hit a problem (bad list ID, HubSpot hiccup,
+// etc.); the dashboard's error banner already surfaces that separately.
+async function syncCampaignSafely(campaignId: number) {
+  try {
+    await runSyncJob({ campaignIds: [campaignId] });
+  } catch (err) {
+    console.error(`[settings] post-save sync failed for campaign ${campaignId}:`, err);
+  }
+}
 
 function str(formData: FormData, key: string): string | null {
   const v = formData.get(key);
@@ -16,16 +28,21 @@ export async function createCampaign(formData: FormData) {
   const hubspotListId = str(formData, "hubspotListId");
   if (!name || !hubspotListId) return;
 
-  await db.insert(campaigns).values({
-    name,
-    hubspotListId,
-    sequenceLabel: str(formData, "sequenceLabel"),
-    ownerName: str(formData, "ownerName"),
-    ownerEmail: str(formData, "ownerEmail"),
-    targetCount: str(formData, "targetCount") ? Number(str(formData, "targetCount")) : null,
-    startDate: str(formData, "startDate"),
-    endDate: str(formData, "endDate"),
-  });
+  const [created] = await db
+    .insert(campaigns)
+    .values({
+      name,
+      hubspotListId,
+      sequenceLabel: str(formData, "sequenceLabel"),
+      ownerName: str(formData, "ownerName"),
+      ownerEmail: str(formData, "ownerEmail"),
+      targetCount: str(formData, "targetCount") ? Number(str(formData, "targetCount")) : null,
+      startDate: str(formData, "startDate"),
+      endDate: str(formData, "endDate"),
+    })
+    .returning();
+
+  await syncCampaignSafely(created.id);
 
   revalidatePath("/settings");
   revalidatePath("/campaigns");
@@ -64,6 +81,8 @@ export async function updateCampaign(formData: FormData) {
       status: str(formData, "status") ?? "active",
     })
     .where(eq(campaigns.id, id));
+
+  await syncCampaignSafely(id);
 
   revalidatePath("/settings");
   revalidatePath("/campaigns");

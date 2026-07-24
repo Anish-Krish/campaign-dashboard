@@ -2,6 +2,7 @@ import Link from "next/link";
 import { StatTile, StatTileRow } from "@/components/StatTile";
 import { EngagementBreakdown } from "@/components/EngagementBreakdown";
 import { RepBreakdownTable } from "@/components/RepBreakdownTable";
+import { SyncNowButton } from "@/components/SyncNowButton";
 import {
   getCampaignsWithCounts,
   getEngagementBreakdown,
@@ -23,13 +24,16 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4">
         <h1 className="text-2xl font-semibold">Dashboard</h1>
-        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-          {lastSync
-            ? `Last synced ${new Date(lastSync.startedAt).toLocaleString()} — ${lastSync.status}`
-            : "No sync has run yet"}
-        </p>
+        <div className="flex items-center gap-3">
+          <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+            {lastSync
+              ? `Last synced ${new Date(lastSync.startedAt).toLocaleString()} — ${lastSync.status}`
+              : "No sync has run yet"}
+          </p>
+          <SyncNowButton />
+        </div>
       </div>
 
       {lastSync?.status === "error" && lastSync.errorMessage && (
