@@ -86,9 +86,21 @@ export async function runSync() {
   const authorityKeywords = await getAuthorityKeywords();
   const allCampaigns = await db.query.campaigns.findMany();
 
+  // One campaign failing (bad list ID, a transient HubSpot error, etc.) must
+  // not prevent every other campaign from syncing — isolate failures per
+  // campaign instead of letting one throw abort the whole run.
+  const failed: Array<{ campaignId: number; name: string; error: string }> = [];
   for (const campaign of allCampaigns) {
-    await syncCampaign(campaign.id, campaign.hubspotListId, authorityKeywords, dispositionClass);
+    try {
+      await syncCampaign(campaign.id, campaign.hubspotListId, authorityKeywords, dispositionClass);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[sync] campaign ${campaign.id} (${campaign.name}) failed:`, message);
+      failed.push({ campaignId: campaign.id, name: campaign.name, error: message });
+    }
   }
+
+  return { total: allCampaigns.length, failed };
 }
 
 async function syncCampaign(

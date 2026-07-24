@@ -32,6 +32,15 @@ export default async function DashboardPage() {
         </p>
       </div>
 
+      {lastSync?.status === "error" && lastSync.errorMessage && (
+        <div
+          className="rounded-lg border p-4 text-sm"
+          style={{ borderColor: "var(--series-red)", color: "var(--series-red)" }}
+        >
+          Last sync had errors: {lastSync.errorMessage}
+        </div>
+      )}
+
       <StatTileRow>
         <StatTile label="Contacts Enrolled" value={funnel.enrolled} />
         <StatTile label="Calls Made" value={funnel.callsMade} />

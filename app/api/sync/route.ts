@@ -15,12 +15,19 @@ export async function GET(request: Request) {
   const [run] = await db.insert(syncRuns).values({ status: "running" }).returning();
 
   try {
-    await runSync();
+    const result = await runSync();
+    const hasFailures = result.failed.length > 0;
     await db
       .update(syncRuns)
-      .set({ status: "success", finishedAt: new Date() })
+      .set({
+        status: hasFailures ? "error" : "success",
+        errorMessage: hasFailures
+          ? result.failed.map((f) => `${f.name} (#${f.campaignId}): ${f.error}`).join("; ")
+          : null,
+        finishedAt: new Date(),
+      })
       .where(eq(syncRuns.id, run.id));
-    return NextResponse.json({ ok: true, syncRunId: run.id });
+    return NextResponse.json({ ok: !hasFailures, syncRunId: run.id, ...result });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await db

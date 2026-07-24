@@ -1,6 +1,6 @@
 import { getAuthorityKeywords } from "@/lib/authority";
 import { getCampaignsWithCounts } from "@/lib/queries";
-import { createCampaign, deleteCampaign, saveAuthorityKeywords, updateCampaignStatus } from "./actions";
+import { createCampaign, deleteCampaign, saveAuthorityKeywords, updateCampaign } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -84,57 +84,163 @@ export default async function SettingsPage() {
 
       <section className="rounded-lg border p-5" style={cardStyle}>
         <h2 className="mb-4 text-lg font-medium">Campaigns</h2>
-        <div className="space-y-3">
+        <div className="space-y-4">
           {campaigns.length === 0 && (
             <p style={{ color: "var(--text-muted)" }}>No campaigns yet.</p>
           )}
           {campaigns.map((c) => (
-            <div
+            <details
               key={c.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded border p-3"
+              className="rounded border p-3"
               style={{ borderColor: "var(--gridline)" }}
             >
-              <div>
-                <div style={{ color: "var(--text-primary)" }} className="font-medium">
-                  {c.name}
+              <summary className="flex cursor-pointer flex-wrap items-center justify-between gap-3">
+                <div>
+                  <span style={{ color: "var(--text-primary)" }} className="font-medium">
+                    {c.name}
+                  </span>
+                  <span className="ml-2 text-xs" style={{ color: "var(--text-muted)" }}>
+                    List {c.hubspotListId} · {c.delivered}
+                    {c.targetCount != null ? ` / ${c.targetCount}` : ""} delivered · {c.status}
+                  </span>
                 </div>
-                <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                  List {c.hubspotListId} · {c.delivered}
-                  {c.targetCount != null ? ` / ${c.targetCount}` : ""} delivered
+              </summary>
+
+              <form
+                action={updateCampaign}
+                className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2"
+              >
+                <input type="hidden" name="id" value={c.id} />
+                <div>
+                  <label className="mb-1 block text-sm" style={labelStyle}>
+                    Campaign name
+                  </label>
+                  <input
+                    name="name"
+                    defaultValue={c.name}
+                    required
+                    className={inputClass}
+                    style={inputStyle}
+                  />
                 </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <form action={updateCampaignStatus} className="flex items-center gap-2">
-                  <input type="hidden" name="id" value={c.id} />
+                <div>
+                  <label className="mb-1 block text-sm" style={labelStyle}>
+                    HubSpot List ID{" "}
+                    <span style={{ color: "var(--text-muted)" }}>(ILS Segment ID, not Legacy)</span>
+                  </label>
+                  <input
+                    name="hubspotListId"
+                    defaultValue={c.hubspotListId}
+                    required
+                    className={inputClass}
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm" style={labelStyle}>
+                    Sequence label
+                  </label>
+                  <input
+                    name="sequenceLabel"
+                    defaultValue={c.sequenceLabel ?? ""}
+                    className={inputClass}
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm" style={labelStyle}>
+                    Target count
+                  </label>
+                  <input
+                    name="targetCount"
+                    type="number"
+                    defaultValue={c.targetCount ?? ""}
+                    className={inputClass}
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm" style={labelStyle}>
+                    Owner name
+                  </label>
+                  <input
+                    name="ownerName"
+                    defaultValue={c.ownerName ?? ""}
+                    className={inputClass}
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm" style={labelStyle}>
+                    Owner email
+                  </label>
+                  <input
+                    name="ownerEmail"
+                    type="email"
+                    defaultValue={c.ownerEmail ?? ""}
+                    className={inputClass}
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm" style={labelStyle}>
+                    Start date
+                  </label>
+                  <input
+                    name="startDate"
+                    type="date"
+                    defaultValue={c.startDate ?? ""}
+                    className={inputClass}
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm" style={labelStyle}>
+                    End date
+                  </label>
+                  <input
+                    name="endDate"
+                    type="date"
+                    defaultValue={c.endDate ?? ""}
+                    className={inputClass}
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm" style={labelStyle}>
+                    Status
+                  </label>
                   <select
                     name="status"
                     defaultValue={c.status}
-                    className="rounded border bg-transparent px-2 py-1 text-sm"
+                    className={inputClass}
                     style={inputStyle}
                   >
                     <option value="active">Active</option>
                     <option value="inactive">Inactive</option>
                   </select>
+                </div>
+                <div className="sm:col-span-2 flex items-center gap-2">
                   <button
                     type="submit"
-                    className="rounded border px-2 py-1 text-sm hover:bg-white/5"
-                    style={{ borderColor: "var(--border-hairline)", color: "var(--text-secondary)" }}
+                    className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500"
                   >
-                    Save
+                    Save changes
                   </button>
-                </form>
-                <form action={deleteCampaign}>
-                  <input type="hidden" name="id" value={c.id} />
-                  <button
-                    type="submit"
-                    className="rounded border px-2 py-1 text-sm hover:bg-red-950"
-                    style={{ borderColor: "var(--series-red)", color: "var(--series-red)" }}
-                  >
-                    Delete
-                  </button>
-                </form>
-              </div>
-            </div>
+                </div>
+              </form>
+
+              <form action={deleteCampaign} className="mt-3">
+                <input type="hidden" name="id" value={c.id} />
+                <button
+                  type="submit"
+                  className="rounded border px-2 py-1 text-sm hover:bg-red-950"
+                  style={{ borderColor: "var(--series-red)", color: "var(--series-red)" }}
+                >
+                  Delete campaign
+                </button>
+              </form>
+            </details>
           ))}
         </div>
       </section>
