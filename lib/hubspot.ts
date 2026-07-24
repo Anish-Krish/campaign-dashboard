@@ -24,6 +24,12 @@ async function hubspotFetch<T>(
   return res.json() as Promise<T>;
 }
 
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
 // --- Lists (a.k.a. "segments") ---------------------------------------------
 // Verified against a live portal: GET /crm/v3/lists/{listId}/memberships
 // returns { results: [{ recordId, membershipTimestamp }], total } — no `paging`
@@ -60,23 +66,16 @@ export async function batchReadObjects<P extends Record<string, unknown>>(
   ids: string[],
   properties: string[],
 ): Promise<Array<{ id: string; properties: P }>> {
-  const out: Array<{ id: string; properties: P }> = [];
-  for (let i = 0; i < ids.length; i += 100) {
-    const chunk = ids.slice(i, i + 100);
-    if (chunk.length === 0) continue;
-    const page = await hubspotFetch<BatchReadResult<P>>(
-      `/crm/v3/objects/${objectType}/batch/read`,
-      {
+  const chunks = chunk(ids, 100).filter((c) => c.length > 0);
+  const pages = await Promise.all(
+    chunks.map((c) =>
+      hubspotFetch<BatchReadResult<P>>(`/crm/v3/objects/${objectType}/batch/read`, {
         method: "POST",
-        body: JSON.stringify({
-          properties,
-          inputs: chunk.map((id) => ({ id })),
-        }),
-      },
-    );
-    out.push(...page.results);
-  }
-  return out;
+        body: JSON.stringify({ properties, inputs: c.map((id) => ({ id })) }),
+      }),
+    ),
+  );
+  return pages.flatMap((p) => p.results);
 }
 
 // --- Associations (v4) ------------------------------------------------------
@@ -96,16 +95,19 @@ export async function batchReadAssociations(
   fromIds: string[],
 ): Promise<Map<string, string[]>> {
   const map = new Map<string, string[]>();
-  for (let i = 0; i < fromIds.length; i += 100) {
-    const chunk = fromIds.slice(i, i + 100);
-    if (chunk.length === 0) continue;
-    const page = await hubspotFetch<AssociationsBatchResponse>(
-      `/crm/v4/associations/${fromObjectType}/${toObjectType}/batch/read`,
-      {
-        method: "POST",
-        body: JSON.stringify({ inputs: chunk.map((id) => ({ id })) }),
-      },
-    );
+  const chunks = chunk(fromIds, 100).filter((c) => c.length > 0);
+  const pages = await Promise.all(
+    chunks.map((c) =>
+      hubspotFetch<AssociationsBatchResponse>(
+        `/crm/v4/associations/${fromObjectType}/${toObjectType}/batch/read`,
+        {
+          method: "POST",
+          body: JSON.stringify({ inputs: c.map((id) => ({ id })) }),
+        },
+      ),
+    ),
+  );
+  for (const page of pages) {
     for (const r of page.results) {
       map.set(
         r.from.id,
@@ -129,7 +131,10 @@ export async function listOwners(): Promise<Owner[]> {
   const owners: Owner[] = [];
   let after: string | undefined;
   do {
-    const qs = new URLSearchParams({ limit: "100" });
+    // archived=true includes deactivated (but not fully-deleted) HubSpot
+    // users, so contacts owned by a former rep still resolve to a name
+    // instead of a dangling ID.
+    const qs = new URLSearchParams({ limit: "100", archived: "true" });
     if (after) qs.set("after", after);
     const page = await hubspotFetch<{
       results: Owner[];

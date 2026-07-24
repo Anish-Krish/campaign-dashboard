@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { campaignCompanies, companies, contacts, owners, syncRuns } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
   batchReadAssociations,
   batchReadObjects,
@@ -36,6 +36,35 @@ function unique<T>(arr: T[]): T[] {
   return Array.from(new Set(arr));
 }
 
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+// A campaign's start/end date scopes which *activity* counts toward it —
+// without this, a contact's entire lifetime history (calls/replies/meetings
+// from a completely unrelated earlier campaign) bleeds into this campaign's
+// numbers just because they're currently on its list. List membership itself
+// is NOT date-filtered (being on the list today is what makes someone a
+// target), only the calls/meetings/deals/replies used to compute funnel and
+// engagement-status signals are. No startDate configured = no filtering
+// (backward compatible for campaigns that haven't set one).
+function withinCampaignWindow(
+  isoDate: string | null | undefined,
+  startDate: string | null,
+  endDate: string | null,
+): boolean {
+  if (!startDate) return true;
+  if (!isoDate) return false;
+  const t = Date.parse(isoDate);
+  if (Number.isNaN(t)) return false;
+  if (t < Date.parse(startDate)) return false;
+  const end = endDate ? Date.parse(`${endDate}T23:59:59`) : Date.now();
+  if (t > end) return false;
+  return true;
+}
+
 // "Genuine reply" is inferred from sequence auto-unenrollment rather than
 // reading email content (avoids needing the emails-read scope entirely):
 // HubSpot auto-unenrolls a contact from a sequence when they reply. Verified
@@ -54,7 +83,11 @@ type ContactSequenceProps = {
   hs_email_hard_bounce_reason_enum?: string;
 };
 
-function inferGenuineReply(props: ContactSequenceProps): boolean {
+function inferGenuineReply(
+  props: ContactSequenceProps,
+  startDate: string | null,
+  endDate: string | null,
+): boolean {
   const stillEnrolled = props.hs_sequences_is_enrolled === "true";
   if (stillEnrolled) return false;
   if (!props.hs_latest_sequence_unenrolled_date) return false;
@@ -63,7 +96,7 @@ function inferGenuineReply(props: ContactSequenceProps): boolean {
     props.hs_email_optout === "true" || props.hs_email_optout_219647228 === "true";
   const bounced = Boolean(props.hs_email_hard_bounce_reason_enum);
   if (optedOut || bounced) return false;
-  return true;
+  return withinCampaignWindow(props.hs_latest_sequence_unenrolled_date, startDate, endDate);
 }
 
 export async function runSync(options?: { campaignIds?: number[] }) {
@@ -73,15 +106,21 @@ export async function runSync(options?: { campaignIds?: number[] }) {
   );
 
   const hsOwners = await listOwners().catch(() => []);
-  for (const o of hsOwners) {
-    const name = [o.firstName, o.lastName].filter(Boolean).join(" ") || o.email || o.id;
-    await db
-      .insert(owners)
-      .values({ hubspotOwnerId: o.id, name, email: o.email ?? null })
-      .onConflictDoUpdate({
-        target: owners.hubspotOwnerId,
-        set: { name, email: o.email ?? null },
-      });
+  if (hsOwners.length > 0) {
+    const ownerRows = hsOwners.map((o) => ({
+      hubspotOwnerId: o.id,
+      name: [o.firstName, o.lastName].filter(Boolean).join(" ") || o.email || o.id,
+      email: o.email ?? null,
+    }));
+    for (const batch of chunkArray(ownerRows, 200)) {
+      await db
+        .insert(owners)
+        .values(batch)
+        .onConflictDoUpdate({
+          target: owners.hubspotOwnerId,
+          set: { name: sql`excluded.name`, email: sql`excluded.email` },
+        });
+    }
   }
 
   const authorityKeywords = await getAuthorityKeywords();
@@ -97,7 +136,14 @@ export async function runSync(options?: { campaignIds?: number[] }) {
   const failed: Array<{ campaignId: number; name: string; error: string }> = [];
   for (const campaign of allCampaigns) {
     try {
-      await syncCampaign(campaign.id, campaign.hubspotListId, authorityKeywords, dispositionClass);
+      await syncCampaign(
+        campaign.id,
+        campaign.hubspotListId,
+        campaign.startDate,
+        campaign.endDate,
+        authorityKeywords,
+        dispositionClass,
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[sync] campaign ${campaign.id} (${campaign.name}) failed:`, message);
@@ -111,6 +157,8 @@ export async function runSync(options?: { campaignIds?: number[] }) {
 async function syncCampaign(
   campaignId: number,
   hubspotListId: string,
+  startDate: string | null,
+  endDate: string | null,
   authorityKeywords: string[],
   dispositionClass: Map<string, "connected" | "not_interested" | "unqualified" | "other">,
 ) {
@@ -182,26 +230,25 @@ async function syncCampaign(
   const dealsById = new Map(dealRecords.map((r) => [r.id, r.properties]));
 
   if (companyRecords.length > 0) {
-    for (const c of companyRecords) {
+    const companyRows = companyRecords.map((c) => ({
+      hubspotCompanyId: c.id,
+      name: c.properties.name || c.id,
+      industry: c.properties.industry ?? null,
+    }));
+    for (const batch of chunkArray(companyRows, 200)) {
       await db
         .insert(companies)
-        .values({
-          hubspotCompanyId: c.id,
-          name: c.properties.name || c.id,
-          industry: c.properties.industry ?? null,
-        })
+        .values(batch)
         .onConflictDoUpdate({
           target: companies.hubspotCompanyId,
-          set: { name: c.properties.name || c.id, industry: c.properties.industry ?? null },
+          set: { name: sql`excluded.name`, industry: sql`excluded.industry` },
         });
     }
   }
 
   // company -> best (outcome, timestamp, sourceContactId) among authority contacts
-  const companyOutcomes = new Map<
-    string,
-    { outcome: Outcome; ts: number; contactId: string }
-  >();
+  const companyOutcomes = new Map<string, { outcome: Outcome; ts: number; contactId: string }>();
+  const contactRows: (typeof contacts.$inferInsert)[] = [];
 
   for (const c of contactRecords) {
     const companyId = contactToCompany.get(c.id)?.[0];
@@ -209,63 +256,40 @@ async function syncCampaign(
 
     const calls = (contactToCalls.get(c.id) ?? [])
       .map((id) => callsById.get(id))
-      .filter((v): v is NonNullable<typeof v> => Boolean(v));
+      .filter((v): v is NonNullable<typeof v> => Boolean(v))
+      .filter((call) => withinCampaignWindow(call.hs_timestamp, startDate, endDate));
     const meetings = (contactToMeetings.get(c.id) ?? [])
       .map((id) => meetingsById.get(id))
-      .filter((v): v is NonNullable<typeof v> => Boolean(v));
+      .filter((v): v is NonNullable<typeof v> => Boolean(v))
+      .filter((m) => withinCampaignWindow(m.hs_timestamp, startDate, endDate));
     const deals = (contactToDeals.get(c.id) ?? [])
       .map((id) => dealsById.get(id))
-      .filter((v): v is NonNullable<typeof v> => Boolean(v));
+      .filter((v): v is NonNullable<typeof v> => Boolean(v))
+      .filter((d) => withinCampaignWindow(d.createdate, startDate, endDate));
 
     const hasCallLogged = calls.length > 0;
     const lastCallConnected = calls.some(
       (call) =>
         call.hs_call_disposition && dispositionClass.get(call.hs_call_disposition) === "connected",
     );
-    const hasGenuineReply = inferGenuineReply(c.properties);
+    const hasGenuineReply = inferGenuineReply(c.properties, startDate, endDate);
     const meetingBooked = meetings.length > 0;
 
-    try {
-      await db
-        .insert(contacts)
-        .values({
-          hubspotContactId: c.id,
-          campaignId,
-          companyId: companyId ?? null,
-          ownerId: c.properties.hubspot_owner_id ?? null,
-          firstName: c.properties.firstname ?? null,
-          lastName: c.properties.lastname ?? null,
-          jobTitle: c.properties.jobtitle ?? null,
-          isAuthority,
-          hasCallLogged,
-          lastCallConnected,
-          hasGenuineReply,
-          meetingBooked,
-          lastSyncedAt: new Date(),
-        })
-        .onConflictDoUpdate({
-          target: contacts.hubspotContactId,
-          set: {
-            campaignId,
-            companyId: companyId ?? null,
-            ownerId: c.properties.hubspot_owner_id ?? null,
-            firstName: c.properties.firstname ?? null,
-            lastName: c.properties.lastname ?? null,
-            jobTitle: c.properties.jobtitle ?? null,
-            isAuthority,
-            hasCallLogged,
-            lastCallConnected,
-            hasGenuineReply,
-            meetingBooked,
-            lastSyncedAt: new Date(),
-          },
-        });
-    } catch (err) {
-      // One bad row (unexpected data shape, transient DB blip, etc.) must not
-      // stop the rest of this campaign's contacts from syncing.
-      console.error(`[sync] contact ${c.id} upsert failed, skipping:`, err);
-      continue;
-    }
+    contactRows.push({
+      hubspotContactId: c.id,
+      campaignId,
+      companyId: companyId ?? null,
+      ownerId: c.properties.hubspot_owner_id ?? null,
+      firstName: c.properties.firstname ?? null,
+      lastName: c.properties.lastname ?? null,
+      jobTitle: c.properties.jobtitle ?? null,
+      isAuthority,
+      hasCallLogged,
+      lastCallConnected,
+      hasGenuineReply,
+      meetingBooked,
+      lastSyncedAt: new Date(),
+    });
 
     if (!isAuthority || !companyId) continue;
 
@@ -301,28 +325,87 @@ async function syncCampaign(
     }
   }
 
-  for (const companyId of allCompanyIds) {
-    const best = companyOutcomes.get(companyId);
+  // Bulk upsert in chunks instead of one round-trip per contact — at list
+  // sizes in the hundreds, sequential per-row writes were slow enough to hit
+  // the serverless function's execution time limit mid-sync, silently
+  // leaving a campaign partially synced. A failed chunk retries row-by-row so
+  // one bad row still can't take out the rest of the list.
+  for (const batch of chunkArray(contactRows, 200)) {
     try {
       await db
-        .insert(campaignCompanies)
-        .values({
-          campaignId,
-          companyId,
-          engagementStatus: best?.outcome ?? "unengaged",
-          statusSourceContactId: best?.contactId ?? null,
-          statusUpdatedAt: best ? new Date(best.ts) : null,
-        })
+        .insert(contacts)
+        .values(batch)
         .onConflictDoUpdate({
-          target: [campaignCompanies.campaignId, campaignCompanies.companyId],
+          target: contacts.hubspotContactId,
           set: {
-            engagementStatus: best?.outcome ?? "unengaged",
-            statusSourceContactId: best?.contactId ?? null,
-            statusUpdatedAt: best ? new Date(best.ts) : null,
+            campaignId: sql`excluded.campaign_id`,
+            companyId: sql`excluded.company_id`,
+            ownerId: sql`excluded.owner_id`,
+            firstName: sql`excluded.first_name`,
+            lastName: sql`excluded.last_name`,
+            jobTitle: sql`excluded.job_title`,
+            isAuthority: sql`excluded.is_authority`,
+            hasCallLogged: sql`excluded.has_call_logged`,
+            lastCallConnected: sql`excluded.last_call_connected`,
+            hasGenuineReply: sql`excluded.has_genuine_reply`,
+            meetingBooked: sql`excluded.meeting_booked`,
+            lastSyncedAt: sql`excluded.last_synced_at`,
           },
         });
     } catch (err) {
-      console.error(`[sync] campaign_companies upsert failed for company ${companyId}, skipping:`, err);
+      console.warn(`[sync] contact batch upsert failed, retrying rows individually:`, err);
+      for (const row of batch) {
+        try {
+          await db
+            .insert(contacts)
+            .values(row)
+            .onConflictDoUpdate({ target: contacts.hubspotContactId, set: row });
+        } catch (rowErr) {
+          console.error(`[sync] contact ${row.hubspotContactId} upsert failed, skipping:`, rowErr);
+        }
+      }
+    }
+  }
+
+  const campaignCompanyRows = allCompanyIds.map((companyId) => {
+    const best = companyOutcomes.get(companyId);
+    return {
+      campaignId,
+      companyId,
+      engagementStatus: (best?.outcome ?? "unengaged") as Outcome | "unengaged",
+      statusSourceContactId: best?.contactId ?? null,
+      statusUpdatedAt: best ? new Date(best.ts) : null,
+    };
+  });
+
+  for (const batch of chunkArray(campaignCompanyRows, 200)) {
+    try {
+      await db
+        .insert(campaignCompanies)
+        .values(batch)
+        .onConflictDoUpdate({
+          target: [campaignCompanies.campaignId, campaignCompanies.companyId],
+          set: {
+            engagementStatus: sql`excluded.engagement_status`,
+            statusSourceContactId: sql`excluded.status_source_contact_id`,
+            statusUpdatedAt: sql`excluded.status_updated_at`,
+          },
+        });
+    } catch (err) {
+      console.warn(`[sync] campaign_companies batch upsert failed, retrying rows individually:`, err);
+      for (const row of batch) {
+        try {
+          await db
+            .insert(campaignCompanies)
+            .values(row)
+            .onConflictDoUpdate({
+              target: [campaignCompanies.campaignId, campaignCompanies.companyId],
+              set: row,
+            });
+        } catch (rowErr) {
+          console.error(`[sync] campaign_companies ${row.companyId} upsert failed, skipping:`, rowErr);
+        }
+      }
     }
   }
 }
