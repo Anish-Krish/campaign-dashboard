@@ -45,6 +45,13 @@ export const companies = pgTable("companies", {
   industry: text("industry"),
 });
 
+// `companyId` / `ownerId` below are intentionally NOT foreign keys to
+// `companies`/`owners`. HubSpot owner and company IDs can reference deleted
+// or archived records that never show up in our synced `owners`/`companies`
+// tables (e.g. a fully deleted HubSpot user, not just deactivated) — a hard
+// FK there means one such dangling reference aborts the entire insert (and,
+// pre-fix, the whole campaign's sync). Joins against these are done as
+// LEFT JOINs in lib/queries.ts and degrade to "Unassigned"/"Unknown" instead.
 export const campaignCompanies = pgTable(
   "campaign_companies",
   {
@@ -52,9 +59,7 @@ export const campaignCompanies = pgTable(
     campaignId: integer("campaign_id")
       .notNull()
       .references(() => campaigns.id, { onDelete: "cascade" }),
-    companyId: text("company_id")
-      .notNull()
-      .references(() => companies.hubspotCompanyId, { onDelete: "cascade" }),
+    companyId: text("company_id").notNull(),
     engagementStatus: engagementStatusEnum("engagement_status")
       .notNull()
       .default("unengaged"),
@@ -69,12 +74,8 @@ export const contacts = pgTable("contacts", {
   campaignId: integer("campaign_id")
     .notNull()
     .references(() => campaigns.id, { onDelete: "cascade" }),
-  companyId: text("company_id").references(() => companies.hubspotCompanyId, {
-    onDelete: "set null",
-  }),
-  ownerId: text("owner_id").references(() => owners.hubspotOwnerId, {
-    onDelete: "set null",
-  }),
+  companyId: text("company_id"),
+  ownerId: text("owner_id"),
   firstName: text("first_name"),
   lastName: text("last_name"),
   jobTitle: text("job_title"),

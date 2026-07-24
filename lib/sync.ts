@@ -220,26 +220,11 @@ async function syncCampaign(
     const hasGenuineReply = inferGenuineReply(c.properties);
     const meetingBooked = meetings.length > 0;
 
-    await db
-      .insert(contacts)
-      .values({
-        hubspotContactId: c.id,
-        campaignId,
-        companyId: companyId ?? null,
-        ownerId: c.properties.hubspot_owner_id ?? null,
-        firstName: c.properties.firstname ?? null,
-        lastName: c.properties.lastname ?? null,
-        jobTitle: c.properties.jobtitle ?? null,
-        isAuthority,
-        hasCallLogged,
-        lastCallConnected,
-        hasGenuineReply,
-        meetingBooked,
-        lastSyncedAt: new Date(),
-      })
-      .onConflictDoUpdate({
-        target: contacts.hubspotContactId,
-        set: {
+    try {
+      await db
+        .insert(contacts)
+        .values({
+          hubspotContactId: c.id,
           campaignId,
           companyId: companyId ?? null,
           ownerId: c.properties.hubspot_owner_id ?? null,
@@ -252,8 +237,30 @@ async function syncCampaign(
           hasGenuineReply,
           meetingBooked,
           lastSyncedAt: new Date(),
-        },
-      });
+        })
+        .onConflictDoUpdate({
+          target: contacts.hubspotContactId,
+          set: {
+            campaignId,
+            companyId: companyId ?? null,
+            ownerId: c.properties.hubspot_owner_id ?? null,
+            firstName: c.properties.firstname ?? null,
+            lastName: c.properties.lastname ?? null,
+            jobTitle: c.properties.jobtitle ?? null,
+            isAuthority,
+            hasCallLogged,
+            lastCallConnected,
+            hasGenuineReply,
+            meetingBooked,
+            lastSyncedAt: new Date(),
+          },
+        });
+    } catch (err) {
+      // One bad row (unexpected data shape, transient DB blip, etc.) must not
+      // stop the rest of this campaign's contacts from syncing.
+      console.error(`[sync] contact ${c.id} upsert failed, skipping:`, err);
+      continue;
+    }
 
     if (!isAuthority || !companyId) continue;
 
@@ -291,22 +298,26 @@ async function syncCampaign(
 
   for (const companyId of allCompanyIds) {
     const best = companyOutcomes.get(companyId);
-    await db
-      .insert(campaignCompanies)
-      .values({
-        campaignId,
-        companyId,
-        engagementStatus: best?.outcome ?? "unengaged",
-        statusSourceContactId: best?.contactId ?? null,
-        statusUpdatedAt: best ? new Date(best.ts) : null,
-      })
-      .onConflictDoUpdate({
-        target: [campaignCompanies.campaignId, campaignCompanies.companyId],
-        set: {
+    try {
+      await db
+        .insert(campaignCompanies)
+        .values({
+          campaignId,
+          companyId,
           engagementStatus: best?.outcome ?? "unengaged",
           statusSourceContactId: best?.contactId ?? null,
           statusUpdatedAt: best ? new Date(best.ts) : null,
-        },
-      });
+        })
+        .onConflictDoUpdate({
+          target: [campaignCompanies.campaignId, campaignCompanies.companyId],
+          set: {
+            engagementStatus: best?.outcome ?? "unengaged",
+            statusSourceContactId: best?.contactId ?? null,
+            statusUpdatedAt: best ? new Date(best.ts) : null,
+          },
+        });
+    } catch (err) {
+      console.error(`[sync] campaign_companies upsert failed for company ${companyId}, skipping:`, err);
+    }
   }
 }

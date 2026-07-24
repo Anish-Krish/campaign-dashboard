@@ -125,11 +125,11 @@ export async function getCompanyRollup(campaignId: number) {
       ),
     })
     .from(campaignCompanies)
-    .innerJoin(companies, eq(campaignCompanies.companyId, companies.hubspotCompanyId))
+    .leftJoin(companies, eq(campaignCompanies.companyId, companies.hubspotCompanyId))
     .where(eq(campaignCompanies.campaignId, campaignId))
     .orderBy(companies.name);
 
-  return rows;
+  return rows.map((r) => ({ ...r, companyName: r.companyName ?? `Unknown company (${r.companyId})` }));
 }
 
 export async function getCampaignsWithCounts() {
