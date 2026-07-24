@@ -75,13 +75,20 @@ export const contacts = pgTable("contacts", {
     .notNull()
     .references(() => campaigns.id, { onDelete: "cascade" }),
   companyId: text("company_id"),
-  ownerId: text("owner_id"),
+  ownerId: text("owner_id"), // the CRM-assigned contact owner — NOT necessarily who worked this contact for this campaign
   firstName: text("first_name"),
   lastName: text("last_name"),
   jobTitle: text("job_title"),
+  leadStatus: text("lead_status"), // raw hs_lead_status value (NEW / IN_PROGRESS / OPEN_DEAL / "Not Interested" / "Unqualified")
   isAuthority: boolean("is_authority").notNull().default(false),
   hasCallLogged: boolean("has_call_logged").notNull().default(false),
   lastCallConnected: boolean("last_call_connected").notNull().default(false),
+  // Owner of the call/meeting activity itself (who actually made the call /
+  // booked the meeting), distinct from `ownerId` — a call's "Activity
+  // assigned to" can be a completely different person than who owns the
+  // contact in the CRM.
+  callOwnerId: text("call_owner_id"),
+  meetingOwnerId: text("meeting_owner_id"),
   hasGenuineReply: boolean("has_genuine_reply").notNull().default(false),
   meetingBooked: boolean("meeting_booked").notNull().default(false),
   lastSyncedAt: timestamp("last_synced_at"),

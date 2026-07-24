@@ -16,21 +16,40 @@ type Outcome = "not_interested" | "unqualified" | "activated_lead" | "meeting_bo
 // live via GET /calling/v1/dispositions): Busy, Connected, Connected - 01 -
 // Pitch, Connected - 02 - Past Pitch, Connected - 03 - Meeting, Connected -
 // 04 - Wrong Title, Left live message, Left voicemail, No answer, Wrong
-// number. There is no "Not Interested" disposition in this portal at all, so
-// `not_interested` can never be produced by call-disposition inference today
-// — it stays reachable in the schema/UI in case a disposition or other
-// signal for it is added later. "Wrong Title" is the closest real signal to
-// "wrong/unqualified contact," so it's mapped to `unqualified`.
-function classifyDispositionLabel(
-  label: string,
-): "connected" | "not_interested" | "unqualified" | "other" {
-  const l = label.toLowerCase();
-  if (l.includes("wrong title")) return "unqualified";
-  if (l.includes("not interest")) return "not_interested";
-  if (l.includes("unqualif")) return "unqualified";
-  if (l.includes("connect")) return "connected";
-  return "other";
+// number. Only used to detect "connected" for the calls funnel now —
+// not_interested/unqualified come from `hs_lead_status` instead (see below),
+// which is real, populated, portal data rather than an inferred guess.
+function classifyDispositionLabel(label: string): "connected" | "other" {
+  return label.toLowerCase().includes("connect") ? "connected" : "other";
 }
+
+// hs_lead_status is the authoritative signal for terminal outcomes — verified
+// live against real contacts in this portal: NEW, IN_PROGRESS, OPEN_DEAL,
+// "Not Interested", "Unqualified" (the last two are literal mixed-case
+// values, not the enum-style casing of the first three).
+function outcomeFromLeadStatus(leadStatus: string | undefined): Outcome | null {
+  switch (leadStatus) {
+    case "Not Interested":
+      return "not_interested";
+    case "Unqualified":
+      return "unqualified";
+    case "OPEN_DEAL":
+      return "activated_lead";
+    default:
+      return null;
+  }
+}
+
+// Fixed priority when a company has multiple authority contacts with
+// different signals — a real, dated meeting/deal beats a lead-status guess,
+// and lead-status outcomes don't carry a reliable "when did this happen"
+// timestamp from the API, so ranking replaces the old "most recent wins" comparison.
+const OUTCOME_RANK: Record<Outcome, number> = {
+  meeting_booked: 4,
+  activated_lead: 3,
+  not_interested: 2,
+  unqualified: 1,
+};
 
 function unique<T>(arr: T[]): T[] {
   return Array.from(new Set(arr));
@@ -160,7 +179,7 @@ async function syncCampaign(
   startDate: string | null,
   endDate: string | null,
   authorityKeywords: string[],
-  dispositionClass: Map<string, "connected" | "not_interested" | "unqualified" | "other">,
+  dispositionClass: Map<string, "connected" | "other">,
 ) {
   const contactIds = await getListMemberIds(hubspotListId);
   if (contactIds.length === 0) return;
@@ -171,12 +190,14 @@ async function syncCampaign(
       lastname?: string;
       jobtitle?: string;
       hubspot_owner_id?: string;
+      hs_lead_status?: string;
     } & ContactSequenceProps
   >("contacts", contactIds, [
     "firstname",
     "lastname",
     "jobtitle",
     "hubspot_owner_id",
+    "hs_lead_status",
     "hs_sequences_is_enrolled",
     "hs_latest_sequence_unenrolled_date",
     "hs_latest_sequence_finished_date",
@@ -185,16 +206,14 @@ async function syncCampaign(
     "hs_email_hard_bounce_reason_enum",
   ]);
 
-  const [contactToCompany, contactToCalls, contactToMeetings, contactToDeals] = await Promise.all([
+  const [contactToCompany, contactToCalls, contactToMeetings] = await Promise.all([
     batchReadAssociations("contacts", "companies", contactIds),
     batchReadAssociations("contacts", "calls", contactIds),
     batchReadAssociations("contacts", "meetings", contactIds),
-    batchReadAssociations("contacts", "deals", contactIds),
   ]);
 
   const allCallIds = unique(Array.from(contactToCalls.values()).flat());
   const allMeetingIds = unique(Array.from(contactToMeetings.values()).flat());
-  const allDealIds = unique(Array.from(contactToDeals.values()).flat());
   const allCompanyIds = unique(Array.from(contactToCompany.values()).flat());
 
   // Each engagement type is fetched independently so a scope gap or outage on
@@ -211,14 +230,17 @@ async function syncCampaign(
     });
   }
 
-  const [callRecords, meetingRecords, dealRecords, companyRecords] = await Promise.all([
-    safeBatchReadObjects<{ hs_call_disposition?: string; hs_timestamp?: string }>(
-      "calls",
-      allCallIds,
-      ["hs_call_disposition", "hs_timestamp"],
+  const [callRecords, meetingRecords, companyRecords] = await Promise.all([
+    safeBatchReadObjects<{
+      hs_call_disposition?: string;
+      hs_timestamp?: string;
+      hubspot_owner_id?: string;
+    }>("calls", allCallIds, ["hs_call_disposition", "hs_timestamp", "hubspot_owner_id"]),
+    safeBatchReadObjects<{ hs_timestamp?: string; hubspot_owner_id?: string }>(
+      "meetings",
+      allMeetingIds,
+      ["hs_timestamp", "hubspot_owner_id"],
     ),
-    safeBatchReadObjects<{ hs_timestamp?: string }>("meetings", allMeetingIds, ["hs_timestamp"]),
-    safeBatchReadObjects<{ createdate?: string }>("deals", allDealIds, ["createdate"]),
     safeBatchReadObjects<{ name?: string; industry?: string }>("companies", allCompanyIds, [
       "name",
       "industry",
@@ -227,7 +249,6 @@ async function syncCampaign(
 
   const callsById = new Map(callRecords.map((r) => [r.id, r.properties]));
   const meetingsById = new Map(meetingRecords.map((r) => [r.id, r.properties]));
-  const dealsById = new Map(dealRecords.map((r) => [r.id, r.properties]));
 
   if (companyRecords.length > 0) {
     const companyRows = companyRecords.map((c) => ({
@@ -246,8 +267,8 @@ async function syncCampaign(
     }
   }
 
-  // company -> best (outcome, timestamp, sourceContactId) among authority contacts
-  const companyOutcomes = new Map<string, { outcome: Outcome; ts: number; contactId: string }>();
+  // company -> best (outcome, contactId) among authority contacts, ranked by OUTCOME_RANK
+  const companyOutcomes = new Map<string, { outcome: Outcome; contactId: string }>();
   const contactRows: (typeof contacts.$inferInsert)[] = [];
 
   for (const c of contactRecords) {
@@ -262,10 +283,6 @@ async function syncCampaign(
       .map((id) => meetingsById.get(id))
       .filter((v): v is NonNullable<typeof v> => Boolean(v))
       .filter((m) => withinCampaignWindow(m.hs_timestamp, startDate, endDate));
-    const deals = (contactToDeals.get(c.id) ?? [])
-      .map((id) => dealsById.get(id))
-      .filter((v): v is NonNullable<typeof v> => Boolean(v))
-      .filter((d) => withinCampaignWindow(d.createdate, startDate, endDate));
 
     const hasCallLogged = calls.length > 0;
     const lastCallConnected = calls.some(
@@ -275,6 +292,18 @@ async function syncCampaign(
     const hasGenuineReply = inferGenuineReply(c.properties, startDate, endDate);
     const meetingBooked = meetings.length > 0;
 
+    // Attribute calls/meetings to whoever the activity is actually assigned
+    // to ("Activity assigned to"), NOT the contact's CRM owner — those are
+    // frequently different people (a contact can be owned by one rep while
+    // someone else works it for this campaign). Picks the most recent
+    // qualifying activity's owner when there are several.
+    const latestCall = [...calls].sort(
+      (a, b) => Date.parse(b.hs_timestamp ?? "") - Date.parse(a.hs_timestamp ?? ""),
+    )[0];
+    const latestMeeting = [...meetings].sort(
+      (a, b) => Date.parse(b.hs_timestamp ?? "") - Date.parse(a.hs_timestamp ?? ""),
+    )[0];
+
     contactRows.push({
       hubspotContactId: c.id,
       campaignId,
@@ -283,9 +312,12 @@ async function syncCampaign(
       firstName: c.properties.firstname ?? null,
       lastName: c.properties.lastname ?? null,
       jobTitle: c.properties.jobtitle ?? null,
+      leadStatus: c.properties.hs_lead_status ?? null,
       isAuthority,
       hasCallLogged,
       lastCallConnected,
+      callOwnerId: latestCall?.hubspot_owner_id ?? null,
+      meetingOwnerId: latestMeeting?.hubspot_owner_id ?? null,
       hasGenuineReply,
       meetingBooked,
       lastSyncedAt: new Date(),
@@ -293,34 +325,14 @@ async function syncCampaign(
 
     if (!isAuthority || !companyId) continue;
 
-    // Terminal outcome for this contact, newest signal wins if multiple apply.
-    let candidate: { outcome: Outcome; ts: number } | null = null;
-    for (const m of meetings) {
-      const ts = m.hs_timestamp ? Date.parse(m.hs_timestamp) : 0;
-      if (!candidate || ts > candidate.ts) candidate = { outcome: "meeting_booked", ts };
-    }
-    if (!candidate) {
-      for (const d of deals) {
-        const ts = d.createdate ? Date.parse(d.createdate) : 0;
-        if (!candidate || ts > candidate.ts) candidate = { outcome: "activated_lead", ts };
-      }
-    }
-    if (!candidate) {
-      for (const call of calls) {
-        const cls = call.hs_call_disposition
-          ? dispositionClass.get(call.hs_call_disposition)
-          : undefined;
-        if (cls === "not_interested" || cls === "unqualified") {
-          const ts = call.hs_timestamp ? Date.parse(call.hs_timestamp) : 0;
-          if (!candidate || ts > candidate.ts) candidate = { outcome: cls, ts };
-        }
-      }
-    }
+    const outcome: Outcome | null = meetingBooked
+      ? "meeting_booked"
+      : outcomeFromLeadStatus(c.properties.hs_lead_status);
 
-    if (candidate) {
+    if (outcome) {
       const existing = companyOutcomes.get(companyId);
-      if (!existing || candidate.ts > existing.ts) {
-        companyOutcomes.set(companyId, { ...candidate, contactId: c.id });
+      if (!existing || OUTCOME_RANK[outcome] > OUTCOME_RANK[existing.outcome]) {
+        companyOutcomes.set(companyId, { outcome, contactId: c.id });
       }
     }
   }
@@ -344,9 +356,12 @@ async function syncCampaign(
             firstName: sql`excluded.first_name`,
             lastName: sql`excluded.last_name`,
             jobTitle: sql`excluded.job_title`,
+            leadStatus: sql`excluded.lead_status`,
             isAuthority: sql`excluded.is_authority`,
             hasCallLogged: sql`excluded.has_call_logged`,
             lastCallConnected: sql`excluded.last_call_connected`,
+            callOwnerId: sql`excluded.call_owner_id`,
+            meetingOwnerId: sql`excluded.meeting_owner_id`,
             hasGenuineReply: sql`excluded.has_genuine_reply`,
             meetingBooked: sql`excluded.meeting_booked`,
             lastSyncedAt: sql`excluded.last_synced_at`,
@@ -374,7 +389,7 @@ async function syncCampaign(
       companyId,
       engagementStatus: (best?.outcome ?? "unengaged") as Outcome | "unengaged",
       statusSourceContactId: best?.contactId ?? null,
-      statusUpdatedAt: best ? new Date(best.ts) : null,
+      statusUpdatedAt: best ? new Date() : null,
     };
   });
 

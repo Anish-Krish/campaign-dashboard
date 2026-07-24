@@ -34,11 +34,16 @@ export async function getLastSyncRun() {
   return run ?? null;
 }
 
+// "Enrolled" means actively being worked (hs_lead_status = IN_PROGRESS), not
+// just present on the HubSpot list — a list can include contacts that are
+// brand new, already resolved (not interested/unqualified), etc.
+const IN_PROGRESS = eq(contacts.leadStatus, "IN_PROGRESS");
+
 export async function getFunnelCounts(campaignId?: number) {
   const contactWhere = campaignId ? eq(contacts.campaignId, campaignId) : undefined;
   const [contactAgg] = await db
     .select({
-      enrolled: sql<number>`count(*)`.mapWith(Number),
+      enrolled: sql<number>`count(*) filter (where ${IN_PROGRESS})`.mapWith(Number),
       callsMade: sql<number>`count(*) filter (where ${contacts.hasCallLogged})`.mapWith(Number),
       connects: sql<number>`count(*) filter (where ${contacts.lastCallConnected})`.mapWith(Number),
       replies: sql<number>`count(*) filter (where ${contacts.hasGenuineReply})`.mapWith(Number),
@@ -91,25 +96,54 @@ export async function getEngagementBreakdown(
   return result;
 }
 
+// Calls/meetings are attributed to whoever the activity itself is assigned
+// to (call_owner_id / meeting_owner_id), NOT the contact's CRM owner
+// (owner_id) — those are frequently different people (e.g. a contact owned
+// by one rep from an older process, actually worked by someone else for this
+// campaign). "Enrolled" and "replies" stay attributed to the contact owner,
+// since there's no independent "who" for those. Raw SQL because each metric
+// aggregates against a different owner column.
 export async function getRepBreakdown(campaignId?: number) {
-  const where = campaignId ? eq(contacts.campaignId, campaignId) : undefined;
-  const rows = await db
-    .select({
-      ownerId: contacts.ownerId,
-      ownerName: owners.name,
-      enrolled: sql<number>`count(*)`.mapWith(Number),
-      callsMade: sql<number>`count(*) filter (where ${contacts.hasCallLogged})`.mapWith(Number),
-      connects: sql<number>`count(*) filter (where ${contacts.lastCallConnected})`.mapWith(Number),
-      replies: sql<number>`count(*) filter (where ${contacts.hasGenuineReply})`.mapWith(Number),
-      meetings: sql<number>`count(*) filter (where ${contacts.meetingBooked})`.mapWith(Number),
-    })
-    .from(contacts)
-    .leftJoin(owners, eq(contacts.ownerId, owners.hubspotOwnerId))
-    .where(where)
-    .groupBy(contacts.ownerId, owners.name)
-    .orderBy(desc(sql`count(*)`));
+  const campaignFilter = campaignId ? sql`and campaign_id = ${campaignId}` : sql``;
 
-  return rows.map((r) => ({ ...r, ownerName: r.ownerName ?? "Unassigned" }));
+  const result = await db.execute<{
+    owner_id: string;
+    owner_name: string | null;
+    enrolled: number;
+    calls_made: number;
+    connects: number;
+    replies: number;
+    meetings: number;
+  }>(sql`
+    with owner_ids as (
+      select owner_id as id from contacts where owner_id is not null ${campaignFilter}
+      union
+      select call_owner_id as id from contacts where call_owner_id is not null ${campaignFilter}
+      union
+      select meeting_owner_id as id from contacts where meeting_owner_id is not null ${campaignFilter}
+    )
+    select
+      oi.id as owner_id,
+      o.name as owner_name,
+      (select count(*) from contacts c where c.owner_id = oi.id and c.lead_status = 'IN_PROGRESS' ${campaignFilter}) as enrolled,
+      (select count(*) from contacts c where c.call_owner_id = oi.id and c.has_call_logged ${campaignFilter}) as calls_made,
+      (select count(*) from contacts c where c.call_owner_id = oi.id and c.last_call_connected ${campaignFilter}) as connects,
+      (select count(*) from contacts c where c.owner_id = oi.id and c.has_genuine_reply ${campaignFilter}) as replies,
+      (select count(*) from contacts c where c.meeting_owner_id = oi.id and c.meeting_booked ${campaignFilter}) as meetings
+    from owner_ids oi
+    left join owners o on o.hubspot_owner_id = oi.id
+    order by calls_made desc, enrolled desc
+  `);
+
+  return result.map((r) => ({
+    ownerId: r.owner_id,
+    ownerName: r.owner_name ?? "Unassigned",
+    enrolled: Number(r.enrolled),
+    callsMade: Number(r.calls_made),
+    connects: Number(r.connects),
+    replies: Number(r.replies),
+    meetings: Number(r.meetings),
+  }));
 }
 
 export async function getCompanyRollup(campaignId: number) {
