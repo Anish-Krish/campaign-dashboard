@@ -131,6 +131,8 @@ export async function getRepBreakdown(campaignId?: number) {
     owner_ids as (
       select call_owner_id as id from resolved where call_owner_id is not null
       union
+      select connected_call_owner_id as id from resolved where connected_call_owner_id is not null
+      union
       select meeting_owner_id as id from resolved where meeting_owner_id is not null
       union
       select campaign_owner_id as id from resolved where campaign_owner_id is not null
@@ -143,7 +145,7 @@ export async function getRepBreakdown(campaignId?: number) {
       ) as owner_name,
       (select count(*) from resolved r where r.campaign_owner_id = oi.id and r.lead_status = 'IN_PROGRESS') as enrolled,
       (select count(*) from resolved r where r.call_owner_id = oi.id and r.has_call_logged) as calls_made,
-      (select count(*) from resolved r where r.call_owner_id = oi.id and r.last_call_connected) as connects,
+      (select count(*) from resolved r where r.connected_call_owner_id = oi.id and r.last_call_connected) as connects,
       (select count(*) from resolved r where r.campaign_owner_id = oi.id and r.has_genuine_reply) as replies,
       (select count(*) from resolved r where r.meeting_owner_id = oi.id and r.meeting_booked) as meetings
     from owner_ids oi
@@ -213,10 +215,12 @@ export async function getCampaign(id: number) {
 export type DrillDownMetric = "enrolled" | "calls" | "connects" | "replies" | "meetings";
 
 const callOwners = alias(owners, "call_owners");
+const connectedCallOwners = alias(owners, "connected_call_owners");
 const meetingOwners = alias(owners, "meeting_owners");
 
 // Backs the click-through popover on each stat tile — "who exactly is behind
-// this number." Reply detection has no independent per-contact signal
+// this number," grouped/sorted by outcome so counts per disposition are
+// visible at a glance. Reply detection has no independent per-contact signal
 // beyond the boolean itself (see inferGenuineReply in lib/sync.ts) — it's
 // inferred from sequence auto-unenrollment, not a distinct email vs. call
 // reply, so that's surfaced plainly rather than invented.
@@ -229,6 +233,13 @@ export async function getContactsForMetric(metric: DrillDownMetric, campaignId?:
     meetings: eq(contacts.meetingBooked, true),
   }[metric];
 
+  // "connects" uses the *connected* call's own disposition/owner/timestamp —
+  // not just the most recent call overall — so a later no-answer follow-up
+  // can't overwrite why/by whom the contact actually counted as a connect.
+  const dispositionCol =
+    metric === "connects" ? contacts.lastConnectedCallDispositionLabel : contacts.lastCallDispositionLabel;
+  const callAtCol = metric === "connects" ? contacts.lastConnectedCallAt : contacts.lastCallAt;
+
   const rows = await db
     .select({
       hubspotContactId: contacts.hubspotContactId,
@@ -237,11 +248,12 @@ export async function getContactsForMetric(metric: DrillDownMetric, campaignId?:
       jobTitle: contacts.jobTitle,
       leadStatus: contacts.leadStatus,
       companyName: companies.name,
-      lastCallDispositionLabel: contacts.lastCallDispositionLabel,
-      lastCallAt: contacts.lastCallAt,
+      dispositionLabel: dispositionCol,
+      callAt: callAtCol,
       lastMeetingAt: contacts.lastMeetingAt,
       hasGenuineReply: contacts.hasGenuineReply,
       callOwnerName: callOwners.name,
+      connectedCallOwnerName: connectedCallOwners.name,
       meetingOwnerName: meetingOwners.name,
       campaignOwnerName: campaigns.ownerName,
     })
@@ -249,28 +261,55 @@ export async function getContactsForMetric(metric: DrillDownMetric, campaignId?:
     .innerJoin(campaigns, eq(contacts.campaignId, campaigns.id))
     .leftJoin(companies, eq(contacts.companyId, companies.hubspotCompanyId))
     .leftJoin(callOwners, eq(contacts.callOwnerId, callOwners.hubspotOwnerId))
+    .leftJoin(connectedCallOwners, eq(contacts.connectedCallOwnerId, connectedCallOwners.hubspotOwnerId))
     .leftJoin(meetingOwners, eq(contacts.meetingOwnerId, meetingOwners.hubspotOwnerId))
     .where(campaignId ? and(eq(contacts.campaignId, campaignId), metricWhere) : metricWhere)
-    .orderBy(contacts.lastName, contacts.firstName);
+    .orderBy(
+      metric === "calls" || metric === "connects" ? dispositionCol : sql`1`,
+      metric === "enrolled" ? contacts.leadStatus : sql`1`,
+      contacts.lastName,
+      contacts.firstName,
+    );
 
-  return rows.map((r) => {
+  const mapped = rows.map((r) => {
     const owner =
-      metric === "calls" || metric === "connects"
+      metric === "calls"
         ? r.callOwnerName
-        : metric === "meetings"
-          ? r.meetingOwnerName
-          : r.campaignOwnerName;
+        : metric === "connects"
+          ? r.connectedCallOwnerName
+          : metric === "meetings"
+            ? r.meetingOwnerName
+            : r.campaignOwnerName;
     return {
       hubspotContactId: r.hubspotContactId,
       name: [r.firstName, r.lastName].filter(Boolean).join(" ") || "(no name)",
       jobTitle: r.jobTitle,
       leadStatus: r.leadStatus,
       companyName: r.companyName,
-      dispositionLabel: r.lastCallDispositionLabel,
-      lastCallAt: r.lastCallAt,
+      dispositionLabel: r.dispositionLabel,
+      lastCallAt: r.callAt,
       lastMeetingAt: r.lastMeetingAt,
       ownerName: owner ?? "Unassigned",
       hubspotUrl: hubspotContactUrl(r.hubspotContactId),
     };
   });
+
+  // Outcome counts for the summary header — dispositionLabel for
+  // calls/connects, leadStatus for enrolled; meetings/replies don't vary by
+  // outcome so no summary is shown for those.
+  const outcomeKey =
+    metric === "calls" || metric === "connects"
+      ? "dispositionLabel"
+      : metric === "enrolled"
+        ? "leadStatus"
+        : null;
+  const outcomeCounts: Record<string, number> = {};
+  if (outcomeKey) {
+    for (const row of mapped) {
+      const key = (row as unknown as Record<string, string | null>)[outcomeKey] ?? "No disposition logged";
+      outcomeCounts[key] = (outcomeCounts[key] ?? 0) + 1;
+    }
+  }
+
+  return { rows: mapped, outcomeCounts };
 }

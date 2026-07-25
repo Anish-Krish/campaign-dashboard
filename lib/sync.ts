@@ -287,11 +287,12 @@ async function syncCampaign(
       .filter((v): v is NonNullable<typeof v> => Boolean(v))
       .filter((m) => withinCampaignWindow(m.hs_timestamp, startDate, endDate));
 
-    const hasCallLogged = calls.length > 0;
-    const lastCallConnected = calls.some(
+    const connectedCalls = calls.filter(
       (call) =>
         call.hs_call_disposition && dispositionClass.get(call.hs_call_disposition) === "connected",
     );
+    const hasCallLogged = calls.length > 0;
+    const lastCallConnected = connectedCalls.length > 0;
     const hasGenuineReply = inferGenuineReply(c.properties, startDate, endDate);
     const meetingBooked = meetings.length > 0;
 
@@ -299,13 +300,15 @@ async function syncCampaign(
     // to ("Activity assigned to"), NOT the contact's CRM owner — those are
     // frequently different people (a contact can be owned by one rep while
     // someone else works it for this campaign). Picks the most recent
-    // qualifying activity's owner when there are several.
-    const latestCall = [...calls].sort(
-      (a, b) => Date.parse(b.hs_timestamp ?? "") - Date.parse(a.hs_timestamp ?? ""),
-    )[0];
-    const latestMeeting = [...meetings].sort(
-      (a, b) => Date.parse(b.hs_timestamp ?? "") - Date.parse(a.hs_timestamp ?? ""),
-    )[0];
+    // qualifying activity when there are several — and for connects
+    // specifically, "most recent" is scoped to connected calls only: a later
+    // no-answer follow-up must not overwrite who made the actual connect or
+    // what the connect's own disposition was.
+    const byMostRecent = (a: { hs_timestamp?: string }, b: { hs_timestamp?: string }) =>
+      Date.parse(b.hs_timestamp ?? "") - Date.parse(a.hs_timestamp ?? "");
+    const latestCall = [...calls].sort(byMostRecent)[0];
+    const latestConnectedCall = [...connectedCalls].sort(byMostRecent)[0];
+    const latestMeeting = [...meetings].sort(byMostRecent)[0];
 
     contactRows.push({
       hubspotContactId: c.id,
@@ -320,11 +323,18 @@ async function syncCampaign(
       hasCallLogged,
       lastCallConnected,
       callOwnerId: latestCall?.hubspot_owner_id ?? null,
+      connectedCallOwnerId: latestConnectedCall?.hubspot_owner_id ?? null,
       meetingOwnerId: latestMeeting?.hubspot_owner_id ?? null,
       lastCallDispositionLabel: latestCall?.hs_call_disposition
         ? (dispositionLabelById.get(latestCall.hs_call_disposition) ?? null)
         : null,
       lastCallAt: latestCall?.hs_timestamp ? new Date(latestCall.hs_timestamp) : null,
+      lastConnectedCallDispositionLabel: latestConnectedCall?.hs_call_disposition
+        ? (dispositionLabelById.get(latestConnectedCall.hs_call_disposition) ?? null)
+        : null,
+      lastConnectedCallAt: latestConnectedCall?.hs_timestamp
+        ? new Date(latestConnectedCall.hs_timestamp)
+        : null,
       lastMeetingAt: latestMeeting?.hs_timestamp ? new Date(latestMeeting.hs_timestamp) : null,
       hasGenuineReply,
       meetingBooked,
@@ -369,9 +379,12 @@ async function syncCampaign(
             hasCallLogged: sql`excluded.has_call_logged`,
             lastCallConnected: sql`excluded.last_call_connected`,
             callOwnerId: sql`excluded.call_owner_id`,
+            connectedCallOwnerId: sql`excluded.connected_call_owner_id`,
             meetingOwnerId: sql`excluded.meeting_owner_id`,
             lastCallDispositionLabel: sql`excluded.last_call_disposition_label`,
             lastCallAt: sql`excluded.last_call_at`,
+            lastConnectedCallDispositionLabel: sql`excluded.last_connected_call_disposition_label`,
+            lastConnectedCallAt: sql`excluded.last_connected_call_at`,
             lastMeetingAt: sql`excluded.last_meeting_at`,
             hasGenuineReply: sql`excluded.has_genuine_reply`,
             meetingBooked: sql`excluded.meeting_booked`,
