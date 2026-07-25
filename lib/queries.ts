@@ -220,10 +220,11 @@ const meetingOwners = alias(owners, "meeting_owners");
 
 // Backs the click-through popover on each stat tile — "who exactly is behind
 // this number," grouped/sorted by outcome so counts per disposition are
-// visible at a glance. Reply detection has no independent per-contact signal
-// beyond the boolean itself (see inferGenuineReply in lib/sync.ts) — it's
-// inferred from sequence auto-unenrollment, not a distinct email vs. call
-// reply, so that's surfaced plainly rather than invented.
+// visible at a glance. Reply channel (email vs. call) isn't a field HubSpot
+// exposes directly — it's inferred: a contact who connected by call within
+// the window almost certainly replied via that conversation, not email, so
+// their reply is attributed to the call; anyone else who auto-unenrolled
+// without a call connect replied via email.
 export async function getContactsForMetric(metric: DrillDownMetric, campaignId?: number) {
   const metricWhere = {
     enrolled: eq(contacts.leadStatus, "IN_PROGRESS"),
@@ -233,13 +234,11 @@ export async function getContactsForMetric(metric: DrillDownMetric, campaignId?:
     meetings: eq(contacts.meetingBooked, true),
   }[metric];
 
-  // "connects" uses the *connected* call's own disposition/owner/timestamp —
-  // not just the most recent call overall — so a later no-answer follow-up
-  // can't overwrite why/by whom the contact actually counted as a connect.
-  const dispositionCol =
-    metric === "connects" ? contacts.lastConnectedCallDispositionLabel : contacts.lastCallDispositionLabel;
-  const callAtCol = metric === "connects" ? contacts.lastConnectedCallAt : contacts.lastCallAt;
-
+  // Always fetch both the "most recent call overall" and "most recent
+  // CONNECTED call" fields and pick per-row below — a "connects" or
+  // "Call reply" row must show the connecting call's own disposition/time,
+  // never a later unrelated call's (e.g. a no-answer follow-up), even though
+  // "calls made" legitimately wants the latest call regardless of outcome.
   const rows = await db
     .select({
       hubspotContactId: contacts.hubspotContactId,
@@ -248,10 +247,13 @@ export async function getContactsForMetric(metric: DrillDownMetric, campaignId?:
       jobTitle: contacts.jobTitle,
       leadStatus: contacts.leadStatus,
       companyName: companies.name,
-      dispositionLabel: dispositionCol,
-      callAt: callAtCol,
+      lastCallDispositionLabel: contacts.lastCallDispositionLabel,
+      lastCallAt: contacts.lastCallAt,
+      lastConnectedCallDispositionLabel: contacts.lastConnectedCallDispositionLabel,
+      lastConnectedCallAt: contacts.lastConnectedCallAt,
       lastMeetingAt: contacts.lastMeetingAt,
       hasGenuineReply: contacts.hasGenuineReply,
+      lastCallConnected: contacts.lastCallConnected,
       callOwnerName: callOwners.name,
       connectedCallOwnerName: connectedCallOwners.name,
       meetingOwnerName: meetingOwners.name,
@@ -265,44 +267,53 @@ export async function getContactsForMetric(metric: DrillDownMetric, campaignId?:
     .leftJoin(meetingOwners, eq(contacts.meetingOwnerId, meetingOwners.hubspotOwnerId))
     .where(campaignId ? and(eq(contacts.campaignId, campaignId), metricWhere) : metricWhere)
     .orderBy(
-      metric === "calls" || metric === "connects" ? dispositionCol : sql`1`,
+      metric === "calls" ? contacts.lastCallDispositionLabel : sql`1`,
+      metric === "connects" ? contacts.lastConnectedCallDispositionLabel : sql`1`,
       metric === "enrolled" ? contacts.leadStatus : sql`1`,
+      metric === "replies" ? contacts.lastCallConnected : sql`1`,
       contacts.lastName,
       contacts.firstName,
     );
 
   const mapped = rows.map((r) => {
+    const isCallReply = metric === "replies" && r.lastCallConnected;
+    const useConnectedCall = metric === "connects" || isCallReply;
+
     const owner =
       metric === "calls"
         ? r.callOwnerName
-        : metric === "connects"
+        : metric === "connects" || isCallReply
           ? r.connectedCallOwnerName
           : metric === "meetings"
             ? r.meetingOwnerName
             : r.campaignOwnerName;
+
     return {
       hubspotContactId: r.hubspotContactId,
       name: [r.firstName, r.lastName].filter(Boolean).join(" ") || "(no name)",
       jobTitle: r.jobTitle,
       leadStatus: r.leadStatus,
       companyName: r.companyName,
-      dispositionLabel: r.dispositionLabel,
-      lastCallAt: r.callAt,
+      dispositionLabel: useConnectedCall ? r.lastConnectedCallDispositionLabel : r.lastCallDispositionLabel,
+      lastCallAt: useConnectedCall ? r.lastConnectedCallAt : r.lastCallAt,
       lastMeetingAt: r.lastMeetingAt,
+      replyChannel: metric === "replies" ? (isCallReply ? "Call reply" : "Email reply") : null,
       ownerName: owner ?? "Unassigned",
       hubspotUrl: hubspotContactUrl(r.hubspotContactId),
     };
   });
 
   // Outcome counts for the summary header — dispositionLabel for
-  // calls/connects, leadStatus for enrolled; meetings/replies don't vary by
-  // outcome so no summary is shown for those.
+  // calls/connects, leadStatus for enrolled, inferred channel for replies;
+  // meetings don't vary by outcome so no summary is shown there.
   const outcomeKey =
     metric === "calls" || metric === "connects"
       ? "dispositionLabel"
       : metric === "enrolled"
         ? "leadStatus"
-        : null;
+        : metric === "replies"
+          ? "replyChannel"
+          : null;
   const outcomeCounts: Record<string, number> = {};
   if (outcomeKey) {
     for (const row of mapped) {

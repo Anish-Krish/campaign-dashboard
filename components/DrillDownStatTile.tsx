@@ -101,9 +101,8 @@ export function DrillDownStatTile({
                 className="border-b px-5 py-2 text-xs"
                 style={{ borderColor: "var(--gridline)", color: "var(--text-muted)" }}
               >
-                Replies are inferred from the contact auto-unenrolling from its sequence — HubSpot
-                doesn&apos;t expose whether it was an email or call reply, so that distinction
-                isn&apos;t shown.
+                Email vs. call is inferred, not a field HubSpot reports directly: connected by call
+                in this window → counted as a call reply, otherwise → email reply.
               </p>
             )}
 
@@ -165,6 +164,15 @@ export function DrillDownStatTile({
                       {(metric === "calls" || metric === "connects") && (
                         <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
                           {r.dispositionLabel ?? "No disposition logged"}
+                          {r.lastCallAt ? ` · ${new Date(r.lastCallAt).toLocaleString()}` : ""}
+                        </div>
+                      )}
+                      {metric === "replies" && r.replyChannel && (
+                        <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+                          {r.replyChannel}
+                          {r.replyChannel === "Call reply" && r.dispositionLabel
+                            ? ` · ${r.dispositionLabel}`
+                            : ""}
                           {r.lastCallAt ? ` · ${new Date(r.lastCallAt).toLocaleString()}` : ""}
                         </div>
                       )}
