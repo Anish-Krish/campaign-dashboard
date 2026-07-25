@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { StatTile, StatTileRow } from "@/components/StatTile";
+import { DrillDownStatTile } from "@/components/DrillDownStatTile";
 import { EngagementBreakdown } from "@/components/EngagementBreakdown";
 import { RepBreakdownTable } from "@/components/RepBreakdownTable";
 import { CompanyRollupTable } from "@/components/CompanyRollupTable";
@@ -43,11 +44,36 @@ export default async function CampaignDetailPage({
       </div>
 
       <StatTileRow>
-        <StatTile label="Contacts Enrolled" value={funnel.enrolled} />
-        <StatTile label="Calls Made" value={funnel.callsMade} />
-        <StatTile label="Connects" value={funnel.connects} />
-        <StatTile label="Replies" value={funnel.replies} />
-        <StatTile label="Meetings Booked" value={funnel.meetings} />
+        <DrillDownStatTile
+          label="Contacts Enrolled"
+          value={funnel.enrolled}
+          metric="enrolled"
+          campaignId={campaignId}
+        />
+        <DrillDownStatTile
+          label="Calls Made"
+          value={funnel.callsMade}
+          metric="calls"
+          campaignId={campaignId}
+        />
+        <DrillDownStatTile
+          label="Connects"
+          value={funnel.connects}
+          metric="connects"
+          campaignId={campaignId}
+        />
+        <DrillDownStatTile
+          label="Replies"
+          value={funnel.replies}
+          metric="replies"
+          campaignId={campaignId}
+        />
+        <DrillDownStatTile
+          label="Meetings Booked"
+          value={funnel.meetings}
+          metric="meetings"
+          campaignId={campaignId}
+        />
         <StatTile label="Companies Targeted" value={funnel.companiesTargeted} />
         <StatTile label="Companies Engaged" value={funnel.companiesEngaged} />
         <StatTile label="Companies Unengaged" value={funnel.companiesUnengaged} />

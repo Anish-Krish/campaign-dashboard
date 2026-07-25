@@ -89,6 +89,13 @@ export const contacts = pgTable("contacts", {
   // contact in the CRM.
   callOwnerId: text("call_owner_id"),
   meetingOwnerId: text("meeting_owner_id"),
+  // Human-readable disposition label of the most recent qualifying call
+  // within the campaign window (e.g. "Connected - 01 - Pitch", "Connected -
+  // 04 - Wrong Title") — kept for the contact drill-down list, so users can
+  // see what actually happened on the call, not just a boolean.
+  lastCallDispositionLabel: text("last_call_disposition_label"),
+  lastCallAt: timestamp("last_call_at"),
+  lastMeetingAt: timestamp("last_meeting_at"),
   hasGenuineReply: boolean("has_genuine_reply").notNull().default(false),
   meetingBooked: boolean("meeting_booked").notNull().default(false),
   lastSyncedAt: timestamp("last_synced_at"),

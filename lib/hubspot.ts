@@ -1,5 +1,14 @@
 const BASE_URL = "https://api.hubapi.com";
 
+// Verified from this portal's own API responses (contact/company/call
+// `url` fields all use this portal ID) — overridable via env var in case
+// this ever points at a different HubSpot account.
+const PORTAL_ID = process.env.HUBSPOT_PORTAL_ID || "43446506";
+
+export function hubspotContactUrl(contactId: string): string {
+  return `https://app.hubspot.com/contacts/${PORTAL_ID}/record/0-1/${contactId}`;
+}
+
 function authHeaders() {
   const token = process.env.HUBSPOT_API_KEY;
   if (!token) throw new Error("HUBSPOT_API_KEY is not set");

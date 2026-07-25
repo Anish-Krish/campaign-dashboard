@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { StatTile, StatTileRow } from "@/components/StatTile";
+import { DrillDownStatTile } from "@/components/DrillDownStatTile";
 import { EngagementBreakdown } from "@/components/EngagementBreakdown";
 import { RepBreakdownTable } from "@/components/RepBreakdownTable";
 import { SyncNowButton } from "@/components/SyncNowButton";
@@ -46,11 +47,11 @@ export default async function DashboardPage() {
       )}
 
       <StatTileRow>
-        <StatTile label="Contacts Enrolled" value={funnel.enrolled} />
-        <StatTile label="Calls Made" value={funnel.callsMade} />
-        <StatTile label="Connects" value={funnel.connects} />
-        <StatTile label="Replies" value={funnel.replies} />
-        <StatTile label="Meetings Booked" value={funnel.meetings} />
+        <DrillDownStatTile label="Contacts Enrolled" value={funnel.enrolled} metric="enrolled" />
+        <DrillDownStatTile label="Calls Made" value={funnel.callsMade} metric="calls" />
+        <DrillDownStatTile label="Connects" value={funnel.connects} metric="connects" />
+        <DrillDownStatTile label="Replies" value={funnel.replies} metric="replies" />
+        <DrillDownStatTile label="Meetings Booked" value={funnel.meetings} metric="meetings" />
         <StatTile label="Companies Targeted" value={funnel.companiesTargeted} />
         <StatTile label="Companies Engaged" value={funnel.companiesEngaged} />
         <StatTile label="Companies Unengaged" value={funnel.companiesUnengaged} />

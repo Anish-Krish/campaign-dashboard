@@ -123,6 +123,7 @@ export async function runSync(options?: { campaignIds?: number[] }) {
   const dispositionClass = new Map(
     dispositionOptions.map((o) => [o.value, classifyDispositionLabel(o.label)]),
   );
+  const dispositionLabelById = new Map(dispositionOptions.map((o) => [o.value, o.label]));
 
   const hsOwners = await listOwners().catch(() => []);
   if (hsOwners.length > 0) {
@@ -162,6 +163,7 @@ export async function runSync(options?: { campaignIds?: number[] }) {
         campaign.endDate,
         authorityKeywords,
         dispositionClass,
+        dispositionLabelById,
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -180,6 +182,7 @@ async function syncCampaign(
   endDate: string | null,
   authorityKeywords: string[],
   dispositionClass: Map<string, "connected" | "other">,
+  dispositionLabelById: Map<string, string>,
 ) {
   const contactIds = await getListMemberIds(hubspotListId);
   if (contactIds.length === 0) return;
@@ -318,6 +321,11 @@ async function syncCampaign(
       lastCallConnected,
       callOwnerId: latestCall?.hubspot_owner_id ?? null,
       meetingOwnerId: latestMeeting?.hubspot_owner_id ?? null,
+      lastCallDispositionLabel: latestCall?.hs_call_disposition
+        ? (dispositionLabelById.get(latestCall.hs_call_disposition) ?? null)
+        : null,
+      lastCallAt: latestCall?.hs_timestamp ? new Date(latestCall.hs_timestamp) : null,
+      lastMeetingAt: latestMeeting?.hs_timestamp ? new Date(latestMeeting.hs_timestamp) : null,
       hasGenuineReply,
       meetingBooked,
       lastSyncedAt: new Date(),
@@ -362,6 +370,9 @@ async function syncCampaign(
             lastCallConnected: sql`excluded.last_call_connected`,
             callOwnerId: sql`excluded.call_owner_id`,
             meetingOwnerId: sql`excluded.meeting_owner_id`,
+            lastCallDispositionLabel: sql`excluded.last_call_disposition_label`,
+            lastCallAt: sql`excluded.last_call_at`,
+            lastMeetingAt: sql`excluded.last_meeting_at`,
             hasGenuineReply: sql`excluded.has_genuine_reply`,
             meetingBooked: sql`excluded.meeting_booked`,
             lastSyncedAt: sql`excluded.last_synced_at`,

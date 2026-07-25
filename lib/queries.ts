@@ -1,6 +1,8 @@
 import { db } from "@/lib/db";
 import { campaignCompanies, campaigns, companies, contacts, owners, syncRuns } from "@/lib/db/schema";
-import { desc, eq, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
+import { and, desc, eq, sql } from "drizzle-orm";
+import { hubspotContactUrl } from "@/lib/hubspot";
 
 export type EngagementStatus =
   | "unengaged"
@@ -97,14 +99,15 @@ export async function getEngagementBreakdown(
 }
 
 // Calls/meetings are attributed to whoever the activity itself is assigned
-// to (call_owner_id / meeting_owner_id), NOT the contact's CRM owner
-// (owner_id) — those are frequently different people (e.g. a contact owned
-// by one rep from an older process, actually worked by someone else for this
-// campaign). "Enrolled" and "replies" stay attributed to the contact owner,
-// since there's no independent "who" for those. Raw SQL because each metric
-// aggregates against a different owner column.
+// to (call_owner_id / meeting_owner_id) — a contact's CRM owner is often a
+// completely different, unrelated person from an older process. "Enrolled"
+// and "replies" have no independent per-contact "who" signal at all, so
+// instead of the (confusing) contact-owner fallback, they're attributed
+// wholesale to that contact's *campaign's* owner (Settings > campaign owner),
+// resolved to a HubSpot owner via matching email where possible so it merges
+// into the same row as that person's call/meeting activity.
 export async function getRepBreakdown(campaignId?: number) {
-  const campaignFilter = campaignId ? sql`and campaign_id = ${campaignId}` : sql``;
+  const campaignFilter = campaignId ? sql`and c.campaign_id = ${campaignId}` : sql``;
 
   const result = await db.execute<{
     owner_id: string;
@@ -115,21 +118,34 @@ export async function getRepBreakdown(campaignId?: number) {
     replies: number;
     meetings: number;
   }>(sql`
-    with owner_ids as (
-      select owner_id as id from contacts where owner_id is not null ${campaignFilter}
+    with resolved as (
+      select
+        c.*,
+        coalesce(co.hubspot_owner_id, cm.owner_name) as campaign_owner_id,
+        coalesce(co.name, cm.owner_name) as campaign_owner_name
+      from contacts c
+      join campaigns cm on cm.id = c.campaign_id
+      left join owners co on lower(co.email) = lower(cm.owner_email)
+      where 1=1 ${campaignFilter}
+    ),
+    owner_ids as (
+      select call_owner_id as id from resolved where call_owner_id is not null
       union
-      select call_owner_id as id from contacts where call_owner_id is not null ${campaignFilter}
+      select meeting_owner_id as id from resolved where meeting_owner_id is not null
       union
-      select meeting_owner_id as id from contacts where meeting_owner_id is not null ${campaignFilter}
+      select campaign_owner_id as id from resolved where campaign_owner_id is not null
     )
     select
       oi.id as owner_id,
-      o.name as owner_name,
-      (select count(*) from contacts c where c.owner_id = oi.id and c.lead_status = 'IN_PROGRESS' ${campaignFilter}) as enrolled,
-      (select count(*) from contacts c where c.call_owner_id = oi.id and c.has_call_logged ${campaignFilter}) as calls_made,
-      (select count(*) from contacts c where c.call_owner_id = oi.id and c.last_call_connected ${campaignFilter}) as connects,
-      (select count(*) from contacts c where c.owner_id = oi.id and c.has_genuine_reply ${campaignFilter}) as replies,
-      (select count(*) from contacts c where c.meeting_owner_id = oi.id and c.meeting_booked ${campaignFilter}) as meetings
+      coalesce(
+        o.name,
+        (select r.campaign_owner_name from resolved r where r.campaign_owner_id = oi.id limit 1)
+      ) as owner_name,
+      (select count(*) from resolved r where r.campaign_owner_id = oi.id and r.lead_status = 'IN_PROGRESS') as enrolled,
+      (select count(*) from resolved r where r.call_owner_id = oi.id and r.has_call_logged) as calls_made,
+      (select count(*) from resolved r where r.call_owner_id = oi.id and r.last_call_connected) as connects,
+      (select count(*) from resolved r where r.campaign_owner_id = oi.id and r.has_genuine_reply) as replies,
+      (select count(*) from resolved r where r.meeting_owner_id = oi.id and r.meeting_booked) as meetings
     from owner_ids oi
     left join owners o on o.hubspot_owner_id = oi.id
     order by calls_made desc, enrolled desc
@@ -192,4 +208,69 @@ export async function getCampaignsWithCounts() {
 export async function getCampaign(id: number) {
   const [row] = await db.select().from(campaigns).where(eq(campaigns.id, id));
   return row ?? null;
+}
+
+export type DrillDownMetric = "enrolled" | "calls" | "connects" | "replies" | "meetings";
+
+const callOwners = alias(owners, "call_owners");
+const meetingOwners = alias(owners, "meeting_owners");
+
+// Backs the click-through popover on each stat tile — "who exactly is behind
+// this number." Reply detection has no independent per-contact signal
+// beyond the boolean itself (see inferGenuineReply in lib/sync.ts) — it's
+// inferred from sequence auto-unenrollment, not a distinct email vs. call
+// reply, so that's surfaced plainly rather than invented.
+export async function getContactsForMetric(metric: DrillDownMetric, campaignId?: number) {
+  const metricWhere = {
+    enrolled: eq(contacts.leadStatus, "IN_PROGRESS"),
+    calls: eq(contacts.hasCallLogged, true),
+    connects: eq(contacts.lastCallConnected, true),
+    replies: eq(contacts.hasGenuineReply, true),
+    meetings: eq(contacts.meetingBooked, true),
+  }[metric];
+
+  const rows = await db
+    .select({
+      hubspotContactId: contacts.hubspotContactId,
+      firstName: contacts.firstName,
+      lastName: contacts.lastName,
+      jobTitle: contacts.jobTitle,
+      leadStatus: contacts.leadStatus,
+      companyName: companies.name,
+      lastCallDispositionLabel: contacts.lastCallDispositionLabel,
+      lastCallAt: contacts.lastCallAt,
+      lastMeetingAt: contacts.lastMeetingAt,
+      hasGenuineReply: contacts.hasGenuineReply,
+      callOwnerName: callOwners.name,
+      meetingOwnerName: meetingOwners.name,
+      campaignOwnerName: campaigns.ownerName,
+    })
+    .from(contacts)
+    .innerJoin(campaigns, eq(contacts.campaignId, campaigns.id))
+    .leftJoin(companies, eq(contacts.companyId, companies.hubspotCompanyId))
+    .leftJoin(callOwners, eq(contacts.callOwnerId, callOwners.hubspotOwnerId))
+    .leftJoin(meetingOwners, eq(contacts.meetingOwnerId, meetingOwners.hubspotOwnerId))
+    .where(campaignId ? and(eq(contacts.campaignId, campaignId), metricWhere) : metricWhere)
+    .orderBy(contacts.lastName, contacts.firstName);
+
+  return rows.map((r) => {
+    const owner =
+      metric === "calls" || metric === "connects"
+        ? r.callOwnerName
+        : metric === "meetings"
+          ? r.meetingOwnerName
+          : r.campaignOwnerName;
+    return {
+      hubspotContactId: r.hubspotContactId,
+      name: [r.firstName, r.lastName].filter(Boolean).join(" ") || "(no name)",
+      jobTitle: r.jobTitle,
+      leadStatus: r.leadStatus,
+      companyName: r.companyName,
+      dispositionLabel: r.lastCallDispositionLabel,
+      lastCallAt: r.lastCallAt,
+      lastMeetingAt: r.lastMeetingAt,
+      ownerName: owner ?? "Unassigned",
+      hubspotUrl: hubspotContactUrl(r.hubspotContactId),
+    };
+  });
 }
