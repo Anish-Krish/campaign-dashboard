@@ -12,6 +12,14 @@ import { getAuthorityKeywords, isAuthorityTitle } from "@/lib/authority";
 
 type Outcome = "not_interested" | "unqualified" | "activated_lead" | "meeting_booked";
 
+// SQO/SQL pipeline definitions, per the user (verified against live
+// GET /crm/v3/pipelines/deals for this portal — these IDs are portal-specific):
+// SQO = a deal reached "Pre-Assessment Questions" or "System Overview" in the
+// Marketing Pipeline (id 62788164). SQL = a deal exists anywhere in the Sales
+// Pipeline (id "default"), any stage — reaching that pipeline at all is SQL.
+const SQO_STAGE_IDS = new Set(["1129362176", "1129362177"]); // Pre-Assessment Questions, System Overview
+const SALES_PIPELINE_ID = "default";
+
 // Classification of this portal's actual call disposition labels (confirmed
 // live via GET /calling/v1/dispositions): Busy, Connected, Connected - 01 -
 // Pitch, Connected - 02 - Past Pitch, Connected - 03 - Meeting, Connected -
@@ -209,14 +217,16 @@ async function syncCampaign(
     "hs_email_hard_bounce_reason_enum",
   ]);
 
-  const [contactToCompany, contactToCalls, contactToMeetings] = await Promise.all([
+  const [contactToCompany, contactToCalls, contactToMeetings, contactToDeals] = await Promise.all([
     batchReadAssociations("contacts", "companies", contactIds),
     batchReadAssociations("contacts", "calls", contactIds),
     batchReadAssociations("contacts", "meetings", contactIds),
+    batchReadAssociations("contacts", "deals", contactIds),
   ]);
 
   const allCallIds = unique(Array.from(contactToCalls.values()).flat());
   const allMeetingIds = unique(Array.from(contactToMeetings.values()).flat());
+  const allDealIds = unique(Array.from(contactToDeals.values()).flat());
   const allCompanyIds = unique(Array.from(contactToCompany.values()).flat());
 
   // Each engagement type is fetched independently so a scope gap or outage on
@@ -233,16 +243,21 @@ async function syncCampaign(
     });
   }
 
-  const [callRecords, meetingRecords, companyRecords] = await Promise.all([
+  const [callRecords, meetingRecords, dealRecords, companyRecords] = await Promise.all([
     safeBatchReadObjects<{
       hs_call_disposition?: string;
       hs_timestamp?: string;
       hubspot_owner_id?: string;
     }>("calls", allCallIds, ["hs_call_disposition", "hs_timestamp", "hubspot_owner_id"]),
-    safeBatchReadObjects<{ hs_timestamp?: string; hubspot_owner_id?: string }>(
+    safeBatchReadObjects<{ hs_timestamp?: string; hubspot_owner_id?: string; hs_meeting_outcome?: string }>(
       "meetings",
       allMeetingIds,
-      ["hs_timestamp", "hubspot_owner_id"],
+      ["hs_timestamp", "hubspot_owner_id", "hs_meeting_outcome"],
+    ),
+    safeBatchReadObjects<{ pipeline?: string; dealstage?: string; createdate?: string }>(
+      "deals",
+      allDealIds,
+      ["pipeline", "dealstage", "createdate"],
     ),
     safeBatchReadObjects<{ name?: string; industry?: string }>("companies", allCompanyIds, [
       "name",
@@ -252,6 +267,7 @@ async function syncCampaign(
 
   const callsById = new Map(callRecords.map((r) => [r.id, r.properties]));
   const meetingsById = new Map(meetingRecords.map((r) => [r.id, r.properties]));
+  const dealsById = new Map(dealRecords.map((r) => [r.id, r.properties]));
 
   if (companyRecords.length > 0) {
     const companyRows = companyRecords.map((c) => ({
@@ -286,6 +302,15 @@ async function syncCampaign(
       .map((id) => meetingsById.get(id))
       .filter((v): v is NonNullable<typeof v> => Boolean(v))
       .filter((m) => withinCampaignWindow(m.hs_timestamp, startDate, endDate));
+    const deals = (contactToDeals.get(c.id) ?? [])
+      .map((id) => dealsById.get(id))
+      .filter((v): v is NonNullable<typeof v> => Boolean(v))
+      .filter((d) => withinCampaignWindow(d.createdate, startDate, endDate));
+
+    const sqoReached = deals.some(
+      (d) => d.pipeline === "62788164" && d.dealstage && SQO_STAGE_IDS.has(d.dealstage),
+    );
+    const sqlReached = deals.some((d) => d.pipeline === SALES_PIPELINE_ID);
 
     const connectedCalls = calls.filter(
       (call) =>
@@ -336,6 +361,9 @@ async function syncCampaign(
         ? new Date(latestConnectedCall.hs_timestamp)
         : null,
       lastMeetingAt: latestMeeting?.hs_timestamp ? new Date(latestMeeting.hs_timestamp) : null,
+      lastMeetingOutcome: latestMeeting?.hs_meeting_outcome ?? null,
+      sqoReached,
+      sqlReached,
       hasGenuineReply,
       meetingBooked,
       lastSyncedAt: new Date(),
@@ -386,6 +414,9 @@ async function syncCampaign(
             lastConnectedCallDispositionLabel: sql`excluded.last_connected_call_disposition_label`,
             lastConnectedCallAt: sql`excluded.last_connected_call_at`,
             lastMeetingAt: sql`excluded.last_meeting_at`,
+            lastMeetingOutcome: sql`excluded.last_meeting_outcome`,
+            sqoReached: sql`excluded.sqo_reached`,
+            sqlReached: sql`excluded.sql_reached`,
             hasGenuineReply: sql`excluded.has_genuine_reply`,
             meetingBooked: sql`excluded.meeting_booked`,
             lastSyncedAt: sql`excluded.last_synced_at`,

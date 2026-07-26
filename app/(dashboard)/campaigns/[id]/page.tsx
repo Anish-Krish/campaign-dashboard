@@ -4,11 +4,15 @@ import { DrillDownStatTile } from "@/components/DrillDownStatTile";
 import { EngagementBreakdown } from "@/components/EngagementBreakdown";
 import { RepBreakdownTable } from "@/components/RepBreakdownTable";
 import { CompanyRollupTable } from "@/components/CompanyRollupTable";
+import { MeetingsTable } from "@/components/MeetingsTable";
+import { ViewTabs } from "@/components/ViewTabs";
 import {
   getCampaign,
   getCompanyRollup,
   getEngagementBreakdown,
   getFunnelCounts,
+  getMeetingsList,
+  getMeetingsPipelineStats,
   getRepBreakdown,
 } from "@/lib/queries";
 
@@ -26,11 +30,13 @@ export default async function CampaignDetailPage({
   const campaign = await getCampaign(campaignId);
   if (!campaign) notFound();
 
-  const [funnel, engagement, reps, companies] = await Promise.all([
+  const [funnel, engagement, reps, companies, meetingStats, meetingsList] = await Promise.all([
     getFunnelCounts(campaignId),
     getEngagementBreakdown(campaignId),
     getRepBreakdown(campaignId),
     getCompanyRollup(campaignId),
+    getMeetingsPipelineStats(campaignId),
+    getMeetingsList(campaignId),
   ]);
 
   return (
@@ -74,17 +80,48 @@ export default async function CampaignDetailPage({
           metric="meetings"
           campaignId={campaignId}
         />
-        <StatTile label="Companies Targeted" value={funnel.companiesTargeted} />
-        <StatTile label="Companies Engaged" value={funnel.companiesEngaged} />
-        <StatTile label="Companies Unengaged" value={funnel.companiesUnengaged} />
       </StatTileRow>
 
-      <EngagementBreakdown counts={engagement} />
-
-      <div>
-        <h2 className="mb-3 text-lg font-medium">Companies</h2>
-        <CompanyRollupTable rows={companies} />
-      </div>
+      <ViewTabs
+        tabs={[
+          {
+            label: "Companies",
+            content: (
+              <div className="space-y-8">
+                <StatTileRow>
+                  <StatTile label="Companies Targeted" value={funnel.companiesTargeted} />
+                  <StatTile label="Companies Engaged" value={funnel.companiesEngaged} />
+                  <StatTile label="Companies Unengaged" value={funnel.companiesUnengaged} />
+                </StatTileRow>
+                <EngagementBreakdown counts={engagement} />
+                <div>
+                  <h2 className="mb-3 text-lg font-medium">Companies</h2>
+                  <CompanyRollupTable rows={companies} />
+                </div>
+              </div>
+            ),
+          },
+          {
+            label: "Meetings",
+            content: (
+              <div className="space-y-8">
+                <StatTileRow>
+                  <StatTile label="Meeting Sat" value={meetingStats.meetingSat} />
+                  <StatTile label="Still to Sit" value={meetingStats.stillToSit} />
+                  <StatTile label="Needs Rebooked" value={meetingStats.needsRebooked} />
+                  <StatTile label="SQO" value={meetingStats.sqo} />
+                  <StatTile label="SQL" value={meetingStats.sql} />
+                  <StatTile label="Meeting Sat vs SQO" value={`${meetingStats.meetingSatVsSqoPercent}%`} />
+                </StatTileRow>
+                <div>
+                  <h2 className="mb-3 text-lg font-medium">Meetings</h2>
+                  <MeetingsTable rows={meetingsList} />
+                </div>
+              </div>
+            ),
+          },
+        ]}
+      />
 
       <div>
         <h2 className="mb-3 text-lg font-medium">By Rep</h2>

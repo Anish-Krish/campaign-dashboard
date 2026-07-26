@@ -104,6 +104,15 @@ export const contacts = pgTable("contacts", {
   lastConnectedCallDispositionLabel: text("last_connected_call_disposition_label"),
   lastConnectedCallAt: timestamp("last_connected_call_at"),
   lastMeetingAt: timestamp("last_meeting_at"),
+  // hs_meeting_outcome of the most recent meeting within window: SCHEDULED /
+  // COMPLETED / RESCHEDULED / NO_SHOW / CANCELED.
+  lastMeetingOutcome: text("last_meeting_outcome"),
+  // SQO = a deal reached "Pre-Assessment Questions" or "System Overview" in
+  // the Marketing Pipeline. SQL = a deal exists in the Sales Pipeline at all
+  // (any stage). Both are portal-specific pipeline/stage IDs, defined by the
+  // user — see SQO_STAGE_IDS / SALES_PIPELINE_ID in lib/sync.ts.
+  sqoReached: boolean("sqo_reached").notNull().default(false),
+  sqlReached: boolean("sql_reached").notNull().default(false),
   hasGenuineReply: boolean("has_genuine_reply").notNull().default(false),
   meetingBooked: boolean("meeting_booked").notNull().default(false),
   lastSyncedAt: timestamp("last_synced_at"),

@@ -324,3 +324,88 @@ export async function getContactsForMetric(metric: DrillDownMetric, campaignId?:
 
   return { rows: mapped, outcomeCounts };
 }
+
+// Meeting-outcome / pipeline-progression view (a separate lens from the
+// company-engagement view): did booked meetings actually happen, and did any
+// progress to a qualified opportunity. SQO/SQL stage IDs are portal-specific,
+// defined by the user — see SQO_STAGE_IDS / SALES_PIPELINE_ID in lib/sync.ts.
+export async function getMeetingsPipelineStats(campaignId?: number) {
+  const where = campaignId ? eq(contacts.campaignId, campaignId) : undefined;
+  const [agg] = await db
+    .select({
+      meetingSat: sql<number>`count(*) filter (where ${contacts.lastMeetingOutcome} = 'COMPLETED')`.mapWith(
+        Number,
+      ),
+      stillToSit: sql<number>`count(*) filter (where ${contacts.lastMeetingOutcome} = 'SCHEDULED')`.mapWith(
+        Number,
+      ),
+      needsRebooked: sql<number>`count(*) filter (where ${contacts.lastMeetingOutcome} in ('RESCHEDULED', 'NO_SHOW', 'CANCELED'))`.mapWith(
+        Number,
+      ),
+      sqo: sql<number>`count(*) filter (where ${contacts.sqoReached})`.mapWith(Number),
+      sql: sql<number>`count(*) filter (where ${contacts.sqlReached})`.mapWith(Number),
+    })
+    .from(contacts)
+    .where(where);
+
+  const meetingSat = agg?.meetingSat ?? 0;
+  const sqo = agg?.sqo ?? 0;
+
+  return {
+    meetingSat,
+    stillToSit: agg?.stillToSit ?? 0,
+    needsRebooked: agg?.needsRebooked ?? 0,
+    sqo,
+    sql: agg?.sql ?? 0,
+    meetingSatVsSqoPercent: meetingSat > 0 ? Math.round((sqo / meetingSat) * 100) : 0,
+  };
+}
+
+const MEETING_OUTCOME_LABELS: Record<string, string> = {
+  SCHEDULED: "Still to Sit",
+  COMPLETED: "Meeting Sat",
+  RESCHEDULED: "Needs Rebooked (Rescheduled)",
+  NO_SHOW: "Needs Rebooked (No Show)",
+  CANCELED: "Needs Rebooked (Canceled)",
+};
+
+export async function getMeetingsList(campaignId?: number) {
+  const where = campaignId
+    ? and(
+        eq(contacts.campaignId, campaignId),
+        sql`(${contacts.meetingBooked} or ${contacts.sqoReached} or ${contacts.sqlReached})`,
+      )
+    : sql`(${contacts.meetingBooked} or ${contacts.sqoReached} or ${contacts.sqlReached})`;
+
+  const rows = await db
+    .select({
+      hubspotContactId: contacts.hubspotContactId,
+      firstName: contacts.firstName,
+      lastName: contacts.lastName,
+      jobTitle: contacts.jobTitle,
+      companyName: companies.name,
+      lastMeetingOutcome: contacts.lastMeetingOutcome,
+      lastMeetingAt: contacts.lastMeetingAt,
+      sqoReached: contacts.sqoReached,
+      sqlReached: contacts.sqlReached,
+      meetingOwnerName: meetingOwners.name,
+    })
+    .from(contacts)
+    .leftJoin(companies, eq(contacts.companyId, companies.hubspotCompanyId))
+    .leftJoin(meetingOwners, eq(contacts.meetingOwnerId, meetingOwners.hubspotOwnerId))
+    .where(where)
+    .orderBy(desc(contacts.lastMeetingAt));
+
+  return rows.map((r) => ({
+    hubspotContactId: r.hubspotContactId,
+    name: [r.firstName, r.lastName].filter(Boolean).join(" ") || "(no name)",
+    jobTitle: r.jobTitle,
+    companyName: r.companyName,
+    meetingOutcomeLabel: r.lastMeetingOutcome ? (MEETING_OUTCOME_LABELS[r.lastMeetingOutcome] ?? r.lastMeetingOutcome) : "No meeting",
+    lastMeetingAt: r.lastMeetingAt,
+    sqoReached: r.sqoReached,
+    sqlReached: r.sqlReached,
+    ownerName: r.meetingOwnerName ?? "Unassigned",
+    hubspotUrl: hubspotContactUrl(r.hubspotContactId),
+  }));
+}

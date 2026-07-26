@@ -3,25 +3,32 @@ import { StatTile, StatTileRow } from "@/components/StatTile";
 import { DrillDownStatTile } from "@/components/DrillDownStatTile";
 import { EngagementBreakdown } from "@/components/EngagementBreakdown";
 import { RepBreakdownTable } from "@/components/RepBreakdownTable";
+import { MeetingsTable } from "@/components/MeetingsTable";
+import { ViewTabs } from "@/components/ViewTabs";
 import { SyncNowButton } from "@/components/SyncNowButton";
 import {
   getCampaignsWithCounts,
   getEngagementBreakdown,
   getFunnelCounts,
   getLastSyncRun,
+  getMeetingsList,
+  getMeetingsPipelineStats,
   getRepBreakdown,
 } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const [funnel, engagement, reps, lastSync, campaignList] = await Promise.all([
-    getFunnelCounts(),
-    getEngagementBreakdown(),
-    getRepBreakdown(),
-    getLastSyncRun(),
-    getCampaignsWithCounts(),
-  ]);
+  const [funnel, engagement, reps, lastSync, campaignList, meetingStats, meetingsList] =
+    await Promise.all([
+      getFunnelCounts(),
+      getEngagementBreakdown(),
+      getRepBreakdown(),
+      getLastSyncRun(),
+      getCampaignsWithCounts(),
+      getMeetingsPipelineStats(),
+      getMeetingsList(),
+    ]);
 
   return (
     <div className="space-y-8">
@@ -52,44 +59,73 @@ export default async function DashboardPage() {
         <DrillDownStatTile label="Connects" value={funnel.connects} metric="connects" />
         <DrillDownStatTile label="Replies" value={funnel.replies} metric="replies" />
         <DrillDownStatTile label="Meetings Booked" value={funnel.meetings} metric="meetings" />
-        <StatTile label="Companies Targeted" value={funnel.companiesTargeted} />
-        <StatTile label="Companies Engaged" value={funnel.companiesEngaged} />
-        <StatTile label="Companies Unengaged" value={funnel.companiesUnengaged} />
       </StatTileRow>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <EngagementBreakdown counts={engagement} />
-        <div
-          className="rounded-lg border p-4"
-          style={{ background: "var(--chart-surface)", borderColor: "var(--border-hairline)" }}
-        >
-          <h3 className="mb-4 text-sm font-medium" style={{ color: "var(--text-secondary)" }}>
-            Campaigns
-          </h3>
-          <ul className="space-y-3 text-sm">
-            {campaignList.length === 0 && (
-              <li style={{ color: "var(--text-muted)" }}>
-                No campaigns yet — add one in Settings.
-              </li>
-            )}
-            {campaignList.map((c) => (
-              <li key={c.id} className="flex items-center justify-between">
-                <Link
-                  href={`/campaigns/${c.id}`}
-                  className="hover:underline"
-                  style={{ color: "var(--series-blue)" }}
-                >
-                  {c.name}
-                </Link>
-                <span style={{ color: "var(--text-secondary)" }}>
-                  {c.delivered}
-                  {c.targetCount != null ? ` / ${c.targetCount}` : ""}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
+      <ViewTabs
+        tabs={[
+          {
+            label: "Companies",
+            content: (
+              <div className="space-y-8">
+                <StatTileRow>
+                  <StatTile label="Companies Targeted" value={funnel.companiesTargeted} />
+                  <StatTile label="Companies Engaged" value={funnel.companiesEngaged} />
+                  <StatTile label="Companies Unengaged" value={funnel.companiesUnengaged} />
+                </StatTileRow>
+                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                  <EngagementBreakdown counts={engagement} />
+                  <div
+                    className="rounded-lg border p-4"
+                    style={{ background: "var(--chart-surface)", borderColor: "var(--border-hairline)" }}
+                  >
+                    <h3 className="mb-4 text-sm font-medium" style={{ color: "var(--text-secondary)" }}>
+                      Campaigns
+                    </h3>
+                    <ul className="space-y-3 text-sm">
+                      {campaignList.length === 0 && (
+                        <li style={{ color: "var(--text-muted)" }}>
+                          No campaigns yet — add one in Settings.
+                        </li>
+                      )}
+                      {campaignList.map((c) => (
+                        <li key={c.id} className="flex items-center justify-between">
+                          <Link
+                            href={`/campaigns/${c.id}`}
+                            className="hover:underline"
+                            style={{ color: "var(--series-blue)" }}
+                          >
+                            {c.name}
+                          </Link>
+                          <span style={{ color: "var(--text-secondary)" }}>
+                            {c.delivered}
+                            {c.targetCount != null ? ` / ${c.targetCount}` : ""}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            ),
+          },
+          {
+            label: "Meetings",
+            content: (
+              <div className="space-y-8">
+                <StatTileRow>
+                  <StatTile label="Meeting Sat" value={meetingStats.meetingSat} />
+                  <StatTile label="Still to Sit" value={meetingStats.stillToSit} />
+                  <StatTile label="Needs Rebooked" value={meetingStats.needsRebooked} />
+                  <StatTile label="SQO" value={meetingStats.sqo} />
+                  <StatTile label="SQL" value={meetingStats.sql} />
+                  <StatTile label="Meeting Sat vs SQO" value={`${meetingStats.meetingSatVsSqoPercent}%`} />
+                </StatTileRow>
+                <MeetingsTable rows={meetingsList} />
+              </div>
+            ),
+          },
+        ]}
+      />
 
       <div>
         <h2 className="mb-3 text-lg font-medium">By Rep</h2>
