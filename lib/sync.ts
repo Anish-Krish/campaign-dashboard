@@ -317,6 +317,7 @@ async function syncCampaign(
         call.hs_call_disposition && dispositionClass.get(call.hs_call_disposition) === "connected",
     );
     const hasCallLogged = calls.length > 0;
+    const callCount = calls.length;
     const lastCallConnected = connectedCalls.length > 0;
     const hasGenuineReply = inferGenuineReply(c.properties, startDate, endDate);
     const meetingBooked = meetings.length > 0;
@@ -346,6 +347,7 @@ async function syncCampaign(
       leadStatus: c.properties.hs_lead_status ?? null,
       isAuthority,
       hasCallLogged,
+      callCount,
       lastCallConnected,
       callOwnerId: latestCall?.hubspot_owner_id ?? null,
       connectedCallOwnerId: latestConnectedCall?.hubspot_owner_id ?? null,
@@ -405,6 +407,7 @@ async function syncCampaign(
             leadStatus: sql`excluded.lead_status`,
             isAuthority: sql`excluded.is_authority`,
             hasCallLogged: sql`excluded.has_call_logged`,
+            callCount: sql`excluded.call_count`,
             lastCallConnected: sql`excluded.last_call_connected`,
             callOwnerId: sql`excluded.call_owner_id`,
             connectedCallOwnerId: sql`excluded.connected_call_owner_id`,

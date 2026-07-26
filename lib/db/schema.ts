@@ -82,6 +82,7 @@ export const contacts = pgTable("contacts", {
   leadStatus: text("lead_status"), // raw hs_lead_status value (NEW / IN_PROGRESS / OPEN_DEAL / "Not Interested" / "Unqualified")
   isAuthority: boolean("is_authority").notNull().default(false),
   hasCallLogged: boolean("has_call_logged").notNull().default(false),
+  callCount: integer("call_count").notNull().default(0), // total call attempts within the campaign window
   lastCallConnected: boolean("last_call_connected").notNull().default(false),
   // Owner of the call/meeting activity itself (who actually made the call /
   // booked the meeting), distinct from `ownerId` — a call's "Activity

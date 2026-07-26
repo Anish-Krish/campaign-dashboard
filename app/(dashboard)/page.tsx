@@ -4,10 +4,12 @@ import { DrillDownStatTile } from "@/components/DrillDownStatTile";
 import { EngagementBreakdown } from "@/components/EngagementBreakdown";
 import { RepBreakdownTable } from "@/components/RepBreakdownTable";
 import { MeetingsTable } from "@/components/MeetingsTable";
+import { CompanyCallFrequency } from "@/components/CompanyCallFrequency";
 import { ViewTabs } from "@/components/ViewTabs";
 import { SyncNowButton } from "@/components/SyncNowButton";
 import {
   getCampaignsWithCounts,
+  getCompanyEngagementSummary,
   getEngagementBreakdown,
   getFunnelCounts,
   getLastSyncRun,
@@ -19,7 +21,7 @@ import {
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const [funnel, engagement, reps, lastSync, campaignList, meetingStats, meetingsList] =
+  const [funnel, engagement, reps, lastSync, campaignList, meetingStats, meetingsList, companySummary] =
     await Promise.all([
       getFunnelCounts(),
       getEngagementBreakdown(),
@@ -28,6 +30,7 @@ export default async function DashboardPage() {
       getCampaignsWithCounts(),
       getMeetingsPipelineStats(),
       getMeetingsList(),
+      getCompanyEngagementSummary(),
     ]);
 
   return (
@@ -72,6 +75,7 @@ export default async function DashboardPage() {
                   <StatTile label="Companies Engaged" value={funnel.companiesEngaged} />
                   <StatTile label="Companies Unengaged" value={funnel.companiesUnengaged} />
                 </StatTileRow>
+                <CompanyCallFrequency summary={companySummary} />
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                   <EngagementBreakdown counts={engagement} />
                   <div

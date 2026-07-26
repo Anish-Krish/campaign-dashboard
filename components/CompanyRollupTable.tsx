@@ -15,6 +15,8 @@ type CompanyRow = {
   engagementStatus: EngagementStatus;
   statusUpdatedAt: Date | null;
   contactCount: number;
+  authorityContactLabel: string;
+  authorityCallCount: number;
 };
 
 export function CompanyRollupTable({ rows }: { rows: CompanyRow[] }) {
@@ -31,6 +33,8 @@ export function CompanyRollupTable({ rows }: { rows: CompanyRow[] }) {
             </th>
             <th className="px-4 py-3 font-medium">Industry</th>
             <th className="px-4 py-3 font-medium"># Contacts</th>
+            <th className="px-4 py-3 font-medium">Authority Contact</th>
+            <th className="px-4 py-3 font-medium"># Calls</th>
             <th className="px-4 py-3 font-medium">Status</th>
             <th className="px-4 py-3 font-medium">Since</th>
           </tr>
@@ -38,7 +42,7 @@ export function CompanyRollupTable({ rows }: { rows: CompanyRow[] }) {
         <tbody>
           {rows.length === 0 && (
             <tr>
-              <td colSpan={5} className="px-4 py-6 text-center" style={{ color: "var(--text-muted)" }}>
+              <td colSpan={7} className="px-4 py-6 text-center" style={{ color: "var(--text-muted)" }}>
                 No companies synced yet
               </td>
             </tr>
@@ -52,6 +56,10 @@ export function CompanyRollupTable({ rows }: { rows: CompanyRow[] }) {
                 {r.industry ?? "—"}
               </td>
               <td className="px-4 py-3 tabular-nums">{r.contactCount}</td>
+              <td className="px-4 py-3" style={{ color: "var(--text-secondary)" }}>
+                {r.authorityContactLabel}
+              </td>
+              <td className="px-4 py-3 tabular-nums">{r.authorityCallCount}</td>
               <td className="px-4 py-3">
                 <span className="inline-flex items-center gap-2">
                   <span

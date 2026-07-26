@@ -41,6 +41,15 @@ export async function getLastSyncRun() {
 // brand new, already resolved (not interested/unqualified), etc.
 const IN_PROGRESS = eq(contacts.leadStatus, "IN_PROGRESS");
 
+// A COMPANY counts as "enrolled" once at least one of its contacts has been
+// touched at all — left lead status "New" (in progress, or already resolved
+// to Not Interested/Unqualified/Open Deal), or has a call/meeting logged.
+// This is the denominator for the engaged/unengaged breakdown and the
+// call-frequency summary — comparing against every company that ever showed
+// up in the HubSpot list (most of which haven't been worked yet) made
+// "unengaged" read as "we tried and failed" when it mostly meant "haven't started."
+const ENROLLED_CONTACT_SQL = sql`((${contacts.leadStatus} is not null and ${contacts.leadStatus} != 'NEW') or ${contacts.hasCallLogged} or ${contacts.meetingBooked})`;
+
 export async function getFunnelCounts(campaignId?: number) {
   const contactWhere = campaignId ? eq(contacts.campaignId, campaignId) : undefined;
   const [contactAgg] = await db
@@ -58,6 +67,19 @@ export async function getFunnelCounts(campaignId?: number) {
   const [companyAgg] = await db
     .select({
       companiesTargeted: sql<number>`count(*)`.mapWith(Number),
+      // NOTE: written with literal table-qualified column names (not drizzle
+      // column-ref interpolation) — verified live that `${col} = ${col}`
+      // interpolation inside `count(*) filter (where exists (...))`
+      // specifically fails to correlate (drizzle renders both sides
+      // unqualified, so it self-joins `contacts` against itself and always
+      // matches). Plain `.where()` and scalar-subquery-in-select both
+      // interpolate correctly — only this filter+exists combination doesn't.
+      companiesEnrolled: sql<number>`count(*) filter (where exists (
+        select 1 from contacts
+        where contacts.campaign_id = campaign_companies.campaign_id
+        and contacts.company_id = campaign_companies.company_id
+        and ((contacts.lead_status is not null and contacts.lead_status != 'NEW') or contacts.has_call_logged or contacts.meeting_booked)
+      ))`.mapWith(Number),
       companiesEngaged: sql<number>`count(*) filter (where ${campaignCompanies.engagementStatus} != 'unengaged')`.mapWith(
         Number,
       ),
@@ -72,15 +94,22 @@ export async function getFunnelCounts(campaignId?: number) {
     replies: contactAgg?.replies ?? 0,
     meetings: contactAgg?.meetings ?? 0,
     companiesTargeted: companyAgg?.companiesTargeted ?? 0,
+    companiesEnrolled: companyAgg?.companiesEnrolled ?? 0,
     companiesEngaged: companyAgg?.companiesEngaged ?? 0,
-    companiesUnengaged: (companyAgg?.companiesTargeted ?? 0) - (companyAgg?.companiesEngaged ?? 0),
+    companiesUnengaged: (companyAgg?.companiesEnrolled ?? 0) - (companyAgg?.companiesEngaged ?? 0),
   };
 }
 
 export async function getEngagementBreakdown(
   campaignId?: number,
 ): Promise<Record<EngagementStatus, number>> {
-  const where = campaignId ? eq(campaignCompanies.campaignId, campaignId) : undefined;
+  const enrolledOnly = sql`exists (
+    select 1 from ${contacts}
+    where ${contacts.campaignId} = ${campaignCompanies.campaignId}
+    and ${contacts.companyId} = ${campaignCompanies.companyId}
+    and ${ENROLLED_CONTACT_SQL}
+  )`;
+  const where = campaignId ? and(eq(campaignCompanies.campaignId, campaignId), enrolledOnly) : enrolledOnly;
   const rows = await db
     .select({
       status: campaignCompanies.engagementStatus,
@@ -164,7 +193,61 @@ export async function getRepBreakdown(campaignId?: number) {
   }));
 }
 
+// "Collectively across companies" view of authority-contact call frequency —
+// among ENROLLED companies only (see ENROLLED_CONTACT_SQL above), how many
+// have had their authority contact(s) called, and how many times. Grouped by
+// (company_id, campaign_id) so the same company across two campaigns counts
+// as two separate rows, consistent with how campaign_companies itself works.
+export async function getCompanyEngagementSummary(campaignId?: number) {
+  const campaignFilter = campaignId ? sql`and campaign_id = ${campaignId}` : sql``;
+
+  const [row] = await db.execute<{
+    companies_enrolled: number;
+    companies_contacted: number;
+    bucket_0: number;
+    bucket_1: number;
+    bucket_2: number;
+    bucket_3plus: number;
+  }>(sql`
+    with company_agg as (
+      select
+        company_id,
+        campaign_id,
+        bool_or(${ENROLLED_CONTACT_SQL}) as enrolled,
+        coalesce(sum(call_count) filter (where is_authority), 0) as authority_calls
+      from contacts
+      where company_id is not null ${campaignFilter}
+      group by company_id, campaign_id
+    )
+    select
+      count(*) filter (where enrolled) as companies_enrolled,
+      count(*) filter (where enrolled and authority_calls > 0) as companies_contacted,
+      count(*) filter (where enrolled and authority_calls = 0) as bucket_0,
+      count(*) filter (where enrolled and authority_calls = 1) as bucket_1,
+      count(*) filter (where enrolled and authority_calls = 2) as bucket_2,
+      count(*) filter (where enrolled and authority_calls >= 3) as bucket_3plus
+    from company_agg
+  `);
+
+  const companiesEnrolled = Number(row?.companies_enrolled ?? 0);
+  const companiesContacted = Number(row?.companies_contacted ?? 0);
+
+  return {
+    companiesEnrolled,
+    companiesContacted,
+    contactRatePercent: companiesEnrolled > 0 ? Math.round((companiesContacted / companiesEnrolled) * 100) : 0,
+    callBuckets: {
+      "0": Number(row?.bucket_0 ?? 0),
+      "1": Number(row?.bucket_1 ?? 0),
+      "2": Number(row?.bucket_2 ?? 0),
+      "3+": Number(row?.bucket_3plus ?? 0),
+    },
+  };
+}
+
 export async function getCompanyRollup(campaignId: number) {
+  const authorityWhere = sql`${contacts.companyId} = ${campaignCompanies.companyId} and ${contacts.campaignId} = ${campaignCompanies.campaignId} and ${contacts.isAuthority}`;
+
   const rows = await db
     .select({
       companyId: campaignCompanies.companyId,
@@ -175,13 +258,27 @@ export async function getCompanyRollup(campaignId: number) {
       contactCount: sql<number>`(select count(*) from ${contacts} where ${contacts.companyId} = ${campaignCompanies.companyId} and ${contacts.campaignId} = ${campaignCompanies.campaignId})`.mapWith(
         Number,
       ),
+      authorityContactCount: sql<number>`(select count(*) from ${contacts} where ${authorityWhere})`.mapWith(
+        Number,
+      ),
+      authorityContactName: sql<string | null>`(select (${contacts.firstName} || ' ' || ${contacts.lastName}) from ${contacts} where ${authorityWhere} limit 1)`,
+      authorityCallCount: sql<number>`(select coalesce(sum(${contacts.callCount}), 0) from ${contacts} where ${authorityWhere})`.mapWith(
+        Number,
+      ),
     })
     .from(campaignCompanies)
     .leftJoin(companies, eq(campaignCompanies.companyId, companies.hubspotCompanyId))
     .where(eq(campaignCompanies.campaignId, campaignId))
     .orderBy(companies.name);
 
-  return rows.map((r) => ({ ...r, companyName: r.companyName ?? `Unknown company (${r.companyId})` }));
+  return rows.map((r) => ({
+    ...r,
+    companyName: r.companyName ?? `Unknown company (${r.companyId})`,
+    authorityContactLabel:
+      r.authorityContactCount > 1
+        ? `${r.authorityContactCount} authority contacts`
+        : (r.authorityContactName ?? "—"),
+  }));
 }
 
 export async function getCampaignsWithCounts() {

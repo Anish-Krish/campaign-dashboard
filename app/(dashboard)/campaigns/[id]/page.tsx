@@ -4,10 +4,12 @@ import { DrillDownStatTile } from "@/components/DrillDownStatTile";
 import { EngagementBreakdown } from "@/components/EngagementBreakdown";
 import { RepBreakdownTable } from "@/components/RepBreakdownTable";
 import { CompanyRollupTable } from "@/components/CompanyRollupTable";
+import { CompanyCallFrequency } from "@/components/CompanyCallFrequency";
 import { MeetingsTable } from "@/components/MeetingsTable";
 import { ViewTabs } from "@/components/ViewTabs";
 import {
   getCampaign,
+  getCompanyEngagementSummary,
   getCompanyRollup,
   getEngagementBreakdown,
   getFunnelCounts,
@@ -30,14 +32,16 @@ export default async function CampaignDetailPage({
   const campaign = await getCampaign(campaignId);
   if (!campaign) notFound();
 
-  const [funnel, engagement, reps, companies, meetingStats, meetingsList] = await Promise.all([
-    getFunnelCounts(campaignId),
-    getEngagementBreakdown(campaignId),
-    getRepBreakdown(campaignId),
-    getCompanyRollup(campaignId),
-    getMeetingsPipelineStats(campaignId),
-    getMeetingsList(campaignId),
-  ]);
+  const [funnel, engagement, reps, companies, meetingStats, meetingsList, companySummary] =
+    await Promise.all([
+      getFunnelCounts(campaignId),
+      getEngagementBreakdown(campaignId),
+      getRepBreakdown(campaignId),
+      getCompanyRollup(campaignId),
+      getMeetingsPipelineStats(campaignId),
+      getMeetingsList(campaignId),
+      getCompanyEngagementSummary(campaignId),
+    ]);
 
   return (
     <div className="space-y-8">
@@ -93,6 +97,7 @@ export default async function CampaignDetailPage({
                   <StatTile label="Companies Engaged" value={funnel.companiesEngaged} />
                   <StatTile label="Companies Unengaged" value={funnel.companiesUnengaged} />
                 </StatTileRow>
+                <CompanyCallFrequency summary={companySummary} />
                 <EngagementBreakdown counts={engagement} />
                 <div>
                   <h2 className="mb-3 text-lg font-medium">Companies</h2>
