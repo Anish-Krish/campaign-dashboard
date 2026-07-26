@@ -5,10 +5,12 @@ import { EngagementBreakdown } from "@/components/EngagementBreakdown";
 import { RepBreakdownTable } from "@/components/RepBreakdownTable";
 import { MeetingsTable } from "@/components/MeetingsTable";
 import { CompanyCallFrequency } from "@/components/CompanyCallFrequency";
+import { CompaniesExplorer } from "@/components/CompaniesExplorer";
 import { ViewTabs } from "@/components/ViewTabs";
 import { SyncNowButton } from "@/components/SyncNowButton";
 import {
   getCampaignsWithCounts,
+  getCompaniesExplorerData,
   getCompanyEngagementSummary,
   getEngagementBreakdown,
   getFunnelCounts,
@@ -21,17 +23,27 @@ import {
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const [funnel, engagement, reps, lastSync, campaignList, meetingStats, meetingsList, companySummary] =
-    await Promise.all([
-      getFunnelCounts(),
-      getEngagementBreakdown(),
-      getRepBreakdown(),
-      getLastSyncRun(),
-      getCampaignsWithCounts(),
-      getMeetingsPipelineStats(),
-      getMeetingsList(),
-      getCompanyEngagementSummary(),
-    ]);
+  const [
+    funnel,
+    engagement,
+    reps,
+    lastSync,
+    campaignList,
+    meetingStats,
+    meetingsList,
+    companySummary,
+    companyExplorerRows,
+  ] = await Promise.all([
+    getFunnelCounts(),
+    getEngagementBreakdown(),
+    getRepBreakdown(),
+    getLastSyncRun(),
+    getCampaignsWithCounts(),
+    getMeetingsPipelineStats(),
+    getMeetingsList(),
+    getCompanyEngagementSummary(),
+    getCompaniesExplorerData(),
+  ]);
 
   return (
     <div className="space-y-8">
@@ -108,6 +120,10 @@ export default async function DashboardPage() {
                       ))}
                     </ul>
                   </div>
+                </div>
+                <div>
+                  <h2 className="mb-3 text-lg font-medium">Companies</h2>
+                  <CompaniesExplorer rows={companyExplorerRows} showCampaignColumn />
                 </div>
               </div>
             ),

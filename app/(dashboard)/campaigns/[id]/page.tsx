@@ -3,14 +3,14 @@ import { StatTile, StatTileRow } from "@/components/StatTile";
 import { DrillDownStatTile } from "@/components/DrillDownStatTile";
 import { EngagementBreakdown } from "@/components/EngagementBreakdown";
 import { RepBreakdownTable } from "@/components/RepBreakdownTable";
-import { CompanyRollupTable } from "@/components/CompanyRollupTable";
+import { CompaniesExplorer } from "@/components/CompaniesExplorer";
 import { CompanyCallFrequency } from "@/components/CompanyCallFrequency";
 import { MeetingsTable } from "@/components/MeetingsTable";
 import { ViewTabs } from "@/components/ViewTabs";
 import {
   getCampaign,
+  getCompaniesExplorerData,
   getCompanyEngagementSummary,
-  getCompanyRollup,
   getEngagementBreakdown,
   getFunnelCounts,
   getMeetingsList,
@@ -32,12 +32,12 @@ export default async function CampaignDetailPage({
   const campaign = await getCampaign(campaignId);
   if (!campaign) notFound();
 
-  const [funnel, engagement, reps, companies, meetingStats, meetingsList, companySummary] =
+  const [funnel, engagement, reps, companyExplorerRows, meetingStats, meetingsList, companySummary] =
     await Promise.all([
       getFunnelCounts(campaignId),
       getEngagementBreakdown(campaignId),
       getRepBreakdown(campaignId),
-      getCompanyRollup(campaignId),
+      getCompaniesExplorerData(campaignId),
       getMeetingsPipelineStats(campaignId),
       getMeetingsList(campaignId),
       getCompanyEngagementSummary(campaignId),
@@ -101,7 +101,7 @@ export default async function CampaignDetailPage({
                 <EngagementBreakdown counts={engagement} />
                 <div>
                   <h2 className="mb-3 text-lg font-medium">Companies</h2>
-                  <CompanyRollupTable rows={companies} />
+                  <CompaniesExplorer rows={companyExplorerRows} />
                 </div>
               </div>
             ),

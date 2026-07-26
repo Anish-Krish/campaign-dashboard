@@ -1,31 +1,12 @@
 import { db } from "@/lib/db";
 import { campaignCompanies, campaigns, companies, contacts, owners, syncRuns } from "@/lib/db/schema";
 import { alias } from "drizzle-orm/pg-core";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { hubspotContactUrl } from "@/lib/hubspot";
+import { ENGAGEMENT_LABELS, ENGAGEMENT_STATUSES, type EngagementStatus } from "@/lib/engagement-constants";
 
-export type EngagementStatus =
-  | "unengaged"
-  | "not_interested"
-  | "unqualified"
-  | "activated_lead"
-  | "meeting_booked";
-
-export const ENGAGEMENT_STATUSES: EngagementStatus[] = [
-  "unengaged",
-  "not_interested",
-  "unqualified",
-  "activated_lead",
-  "meeting_booked",
-];
-
-export const ENGAGEMENT_LABELS: Record<EngagementStatus, string> = {
-  unengaged: "Unengaged",
-  not_interested: "Not Interested",
-  unqualified: "Unqualified",
-  activated_lead: "Activated Lead",
-  meeting_booked: "Meeting Booked",
-};
+export type { EngagementStatus } from "@/lib/engagement-constants";
+export { ENGAGEMENT_LABELS, ENGAGEMENT_STATUSES } from "@/lib/engagement-constants";
 
 export async function getLastSyncRun() {
   const [run] = await db
@@ -245,40 +226,117 @@ export async function getCompanyEngagementSummary(campaignId?: number) {
   };
 }
 
-export async function getCompanyRollup(campaignId: number) {
-  const authorityWhere = sql`${contacts.companyId} = ${campaignCompanies.companyId} and ${contacts.campaignId} = ${campaignCompanies.campaignId} and ${contacts.isAuthority}`;
+export type CompanyExplorerContact = {
+  hubspotContactId: string;
+  name: string;
+  jobTitle: string | null;
+  leadStatus: string | null;
+  callCount: number;
+  dispositionLabel: string | null;
+  lastCallAt: Date | null;
+  hubspotUrl: string;
+};
 
-  const rows = await db
+export type CompanyExplorerRow = {
+  campaignId: number;
+  campaignName: string | null;
+  companyId: string;
+  companyName: string;
+  industry: string | null;
+  engagementStatus: EngagementStatus;
+  contactCount: number;
+  enrolled: boolean;
+  authorityCallCount: number;
+  sqoReached: boolean;
+  sqlReached: boolean;
+  authorityContacts: CompanyExplorerContact[];
+  championContacts: CompanyExplorerContact[];
+};
+
+// Backs the filterable/sortable Companies Explorer table — one row per
+// (campaign, company) pairing (consistent with how campaign_companies is
+// keyed), each carrying its authority/champion contact lists for inline
+// row expansion. Two queries merged in JS rather than one query with nested
+// json_agg: simpler to get right, and this session already found a real
+// drizzle-orm bug in one particular correlated-subquery shape (see the
+// companiesEnrolled note in getFunnelCounts above) — scalar `(select
+// exists(...))` / `(select count(...))` subqueries in a .select() list are
+// the proven-safe pattern, so that's what's used here throughout.
+export async function getCompaniesExplorerData(campaignId?: number): Promise<CompanyExplorerRow[]> {
+  const sameCompany = sql`${contacts.companyId} = ${campaignCompanies.companyId} and ${contacts.campaignId} = ${campaignCompanies.campaignId}`;
+  const sameCompanyAuthority = sql`${sameCompany} and ${contacts.isAuthority}`;
+
+  const companyRows = await db
     .select({
+      campaignId: campaignCompanies.campaignId,
+      campaignName: campaigns.name,
       companyId: campaignCompanies.companyId,
       companyName: companies.name,
       industry: companies.industry,
       engagementStatus: campaignCompanies.engagementStatus,
-      statusUpdatedAt: campaignCompanies.statusUpdatedAt,
-      contactCount: sql<number>`(select count(*) from ${contacts} where ${contacts.companyId} = ${campaignCompanies.companyId} and ${contacts.campaignId} = ${campaignCompanies.campaignId})`.mapWith(
+      contactCount: sql<number>`(select count(*) from ${contacts} where ${sameCompany})`.mapWith(Number),
+      enrolled: sql<boolean>`(select exists(select 1 from ${contacts} where ${sameCompany} and ${ENROLLED_CONTACT_SQL}))`,
+      authorityCallCount: sql<number>`(select coalesce(sum(${contacts.callCount}), 0) from ${contacts} where ${sameCompanyAuthority})`.mapWith(
         Number,
       ),
-      authorityContactCount: sql<number>`(select count(*) from ${contacts} where ${authorityWhere})`.mapWith(
-        Number,
-      ),
-      authorityContactName: sql<string | null>`(select (${contacts.firstName} || ' ' || ${contacts.lastName}) from ${contacts} where ${authorityWhere} limit 1)`,
-      authorityCallCount: sql<number>`(select coalesce(sum(${contacts.callCount}), 0) from ${contacts} where ${authorityWhere})`.mapWith(
-        Number,
-      ),
+      sqoReached: sql<boolean>`(select exists(select 1 from ${contacts} where ${sameCompany} and ${contacts.sqoReached}))`,
+      sqlReached: sql<boolean>`(select exists(select 1 from ${contacts} where ${sameCompany} and ${contacts.sqlReached}))`,
     })
     .from(campaignCompanies)
     .leftJoin(companies, eq(campaignCompanies.companyId, companies.hubspotCompanyId))
-    .where(eq(campaignCompanies.campaignId, campaignId))
+    .leftJoin(campaigns, eq(campaignCompanies.campaignId, campaigns.id))
+    .where(campaignId ? eq(campaignCompanies.campaignId, campaignId) : undefined)
     .orderBy(companies.name);
 
-  return rows.map((r) => ({
-    ...r,
-    companyName: r.companyName ?? `Unknown company (${r.companyId})`,
-    authorityContactLabel:
-      r.authorityContactCount > 1
-        ? `${r.authorityContactCount} authority contacts`
-        : (r.authorityContactName ?? "—"),
-  }));
+  const contactRows = await db
+    .select({
+      hubspotContactId: contacts.hubspotContactId,
+      campaignId: contacts.campaignId,
+      companyId: contacts.companyId,
+      firstName: contacts.firstName,
+      lastName: contacts.lastName,
+      jobTitle: contacts.jobTitle,
+      isAuthority: contacts.isAuthority,
+      leadStatus: contacts.leadStatus,
+      callCount: contacts.callCount,
+      lastCallDispositionLabel: contacts.lastCallDispositionLabel,
+      lastCallAt: contacts.lastCallAt,
+    })
+    .from(contacts)
+    .where(
+      campaignId
+        ? and(eq(contacts.campaignId, campaignId), isNotNull(contacts.companyId))
+        : isNotNull(contacts.companyId),
+    );
+
+  const contactsByKey = new Map<string, typeof contactRows>();
+  for (const c of contactRows) {
+    const key = `${c.campaignId}:${c.companyId}`;
+    const list = contactsByKey.get(key);
+    if (list) list.push(c);
+    else contactsByKey.set(key, [c]);
+  }
+
+  const toExplorerContact = (c: (typeof contactRows)[number]): CompanyExplorerContact => ({
+    hubspotContactId: c.hubspotContactId,
+    name: [c.firstName, c.lastName].filter(Boolean).join(" ") || "(no name)",
+    jobTitle: c.jobTitle,
+    leadStatus: c.leadStatus,
+    callCount: c.callCount,
+    dispositionLabel: c.lastCallDispositionLabel,
+    lastCallAt: c.lastCallAt,
+    hubspotUrl: hubspotContactUrl(c.hubspotContactId),
+  });
+
+  return companyRows.map((row) => {
+    const rowContacts = contactsByKey.get(`${row.campaignId}:${row.companyId}`) ?? [];
+    return {
+      ...row,
+      companyName: row.companyName ?? `Unknown company (${row.companyId})`,
+      authorityContacts: rowContacts.filter((c) => c.isAuthority).map(toExplorerContact),
+      championContacts: rowContacts.filter((c) => !c.isAuthority).map(toExplorerContact),
+    };
+  });
 }
 
 export async function getCampaignsWithCounts() {
