@@ -84,7 +84,11 @@ export function DrillDownStatTile({
             >
               <h3 className="text-lg font-medium" style={{ color: "var(--text-primary)" }}>
                 {METRIC_TITLES[metric]}
-                {rows ? ` (${rows.length})` : ""}
+                {rows && metric === "calls"
+                  ? ` (${rows.length} contacts, ${rows.reduce((sum, r) => sum + (r.callCount ?? 0), 0)} calls)`
+                  : rows
+                    ? ` (${rows.length})`
+                    : ""}
               </h3>
               <button
                 type="button"
@@ -163,6 +167,9 @@ export function DrillDownStatTile({
                       </div>
                       {(metric === "calls" || metric === "connects") && (
                         <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+                          {metric === "calls" && r.callCount != null
+                            ? `${r.callCount} call${r.callCount === 1 ? "" : "s"} · `
+                            : ""}
                           {r.dispositionLabel ?? "No disposition logged"}
                           {r.lastCallAt ? ` · ${new Date(r.lastCallAt).toLocaleString()}` : ""}
                         </div>

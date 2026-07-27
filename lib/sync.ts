@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { campaignCompanies, companies, contacts, owners, syncRuns } from "@/lib/db/schema";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, notInArray, sql } from "drizzle-orm";
 import {
   batchReadAssociations,
   batchReadObjects,
@@ -480,6 +480,28 @@ async function syncCampaign(
         }
       }
     }
+  }
+
+  // Reconcile to current list membership: sync only ever upserted contacts
+  // that are on the list *right now* — anyone removed from the HubSpot list
+  // since the last sync (disqualified, moved off, etc.) would otherwise stay
+  // in our DB forever, inflating every count that reads from `contacts`
+  // (Calls Made, Companies Enrolled, ...). Safe because contactIds is
+  // guaranteed non-empty here (syncCampaign returns early otherwise), so
+  // this can never wipe a campaign's contacts on a failed/empty fetch.
+  await db
+    .delete(contacts)
+    .where(and(eq(contacts.campaignId, campaignId), notInArray(contacts.hubspotContactId, contactIds)));
+
+  // Same reconciliation for companies — but only if this sync actually
+  // resolved at least one company, so a transient issue that legitimately
+  // yields zero associations can't wipe every company row for the campaign.
+  if (allCompanyIds.length > 0) {
+    await db
+      .delete(campaignCompanies)
+      .where(
+        and(eq(campaignCompanies.campaignId, campaignId), notInArray(campaignCompanies.companyId, allCompanyIds)),
+      );
   }
 }
 

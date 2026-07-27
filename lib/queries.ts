@@ -36,7 +36,11 @@ export async function getFunnelCounts(campaignId?: number) {
   const [contactAgg] = await db
     .select({
       enrolled: sql<number>`count(*) filter (where ${IN_PROGRESS})`.mapWith(Number),
-      callsMade: sql<number>`count(*) filter (where ${contacts.hasCallLogged})`.mapWith(Number),
+      // "Calls Made" is total call attempts (sum of call_count), not the
+      // number of distinct contacts with >=1 call — a re-dial to someone who
+      // didn't pick up is still a real call, and counting distinct contacts
+      // made this look like it barely moved on a day with 100+ real dials.
+      callsMade: sql<number>`coalesce(sum(${contacts.callCount}), 0)`.mapWith(Number),
       connects: sql<number>`count(*) filter (where ${contacts.lastCallConnected})`.mapWith(Number),
       replies: sql<number>`count(*) filter (where ${contacts.hasGenuineReply})`.mapWith(Number),
       meetings: sql<number>`count(*) filter (where ${contacts.meetingBooked})`.mapWith(Number),
@@ -154,7 +158,7 @@ export async function getRepBreakdown(campaignId?: number) {
         (select r.campaign_owner_name from resolved r where r.campaign_owner_id = oi.id limit 1)
       ) as owner_name,
       (select count(*) from resolved r where r.campaign_owner_id = oi.id and r.lead_status = 'IN_PROGRESS') as enrolled,
-      (select count(*) from resolved r where r.call_owner_id = oi.id and r.has_call_logged) as calls_made,
+      (select coalesce(sum(r.call_count), 0) from resolved r where r.call_owner_id = oi.id) as calls_made,
       (select count(*) from resolved r where r.connected_call_owner_id = oi.id and r.last_call_connected) as connects,
       (select count(*) from resolved r where r.campaign_owner_id = oi.id and r.has_genuine_reply) as replies,
       (select count(*) from resolved r where r.meeting_owner_id = oi.id and r.meeting_booked) as meetings
@@ -409,6 +413,7 @@ export async function getContactsForMetric(metric: DrillDownMetric, campaignId?:
       lastMeetingAt: contacts.lastMeetingAt,
       hasGenuineReply: contacts.hasGenuineReply,
       lastCallConnected: contacts.lastCallConnected,
+      callCount: contacts.callCount,
       callOwnerName: callOwners.name,
       connectedCallOwnerName: connectedCallOwners.name,
       meetingOwnerName: meetingOwners.name,
@@ -452,6 +457,7 @@ export async function getContactsForMetric(metric: DrillDownMetric, campaignId?:
       dispositionLabel: useConnectedCall ? r.lastConnectedCallDispositionLabel : r.lastCallDispositionLabel,
       lastCallAt: useConnectedCall ? r.lastConnectedCallAt : r.lastCallAt,
       lastMeetingAt: r.lastMeetingAt,
+      callCount: metric === "calls" ? r.callCount : null,
       replyChannel: metric === "replies" ? (isCallReply ? "Call reply" : "Email reply") : null,
       ownerName: owner ?? "Unassigned",
       hubspotUrl: hubspotContactUrl(r.hubspotContactId),
