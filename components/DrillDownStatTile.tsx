@@ -2,10 +2,12 @@
 
 import { useState, useTransition } from "react";
 import { fetchDrillDown } from "@/app/(dashboard)/drilldown-actions";
+import { DailyCallsChart } from "@/components/DailyCallsChart";
 import type { DrillDownMetric } from "@/lib/queries";
 
 type DrillDownResult = Awaited<ReturnType<typeof fetchDrillDown>>;
 type ContactRow = DrillDownResult["rows"][number];
+type DailyStats = DrillDownResult["dailyStats"];
 
 const METRIC_TITLES: Record<DrillDownMetric, string> = {
   enrolled: "Contacts Enrolled",
@@ -29,7 +31,10 @@ export function DrillDownStatTile({
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<ContactRow[] | null>(null);
   const [outcomeCounts, setOutcomeCounts] = useState<Record<string, number>>({});
+  const [dailyStats, setDailyStats] = useState<DailyStats>(null);
   const [isPending, startTransition] = useTransition();
+
+  const showDailyChart = metric === "calls" || metric === "connects";
 
   function handleOpen() {
     setOpen(true);
@@ -37,6 +42,7 @@ export function DrillDownStatTile({
       const data = await fetchDrillDown(metric, campaignId);
       setRows(data.rows);
       setOutcomeCounts(data.outcomeCounts);
+      setDailyStats(data.dailyStats);
     });
   }
 
@@ -74,7 +80,7 @@ export function DrillDownStatTile({
           onClick={() => setOpen(false)}
         >
           <div
-            className="max-h-[80vh] w-full max-w-2xl overflow-hidden rounded-lg border"
+            className={`max-h-[80vh] w-full overflow-hidden rounded-lg border ${showDailyChart ? "max-w-3xl" : "max-w-2xl"}`}
             style={{ background: "var(--chart-surface)", borderColor: "var(--border-hairline)" }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -108,6 +114,10 @@ export function DrillDownStatTile({
                 Email vs. call is inferred, not a field HubSpot reports directly: connected by call
                 in this window → counted as a call reply, otherwise → email reply.
               </p>
+            )}
+
+            {showDailyChart && dailyStats && (
+              <DailyCallsChart data={dailyStats} mode={metric === "connects" ? "connects" : "calls"} />
             )}
 
             {Object.keys(outcomeCounts).length > 1 && (

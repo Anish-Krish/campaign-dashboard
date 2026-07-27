@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { campaignCompanies, campaigns, companies, contacts, owners, syncRuns } from "@/lib/db/schema";
+import { callEvents, campaignCompanies, campaigns, companies, contacts, owners, syncRuns } from "@/lib/db/schema";
 import { alias } from "drizzle-orm/pg-core";
 import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { hubspotContactUrl } from "@/lib/hubspot";
@@ -484,6 +484,39 @@ export async function getContactsForMetric(metric: DrillDownMetric, campaignId?:
   }
 
   return { rows: mapped, outcomeCounts };
+}
+
+// Powers the daily bar chart inside the Calls Made / Connects drill-down
+// popups. `dispositionCategory` is precomputed at sync time (see
+// classifyForDailyChart in lib/sync.ts) so this is a plain grouped count, no
+// string matching here. Grouped in UTC day boundaries — calledAt is stored as
+// a bare timestamp (HubSpot's hs_timestamp), consistent with how the rest of
+// the app treats call/meeting times.
+export async function getDailyCallStats(campaignId?: number) {
+  const dayExpr = sql`date_trunc('day', ${callEvents.calledAt})`;
+
+  const rows = await db
+    .select({
+      date: sql<string>`to_char(${dayExpr}, 'YYYY-MM-DD')`,
+      callsMade: sql<number>`count(*)::int`,
+      connects: sql<number>`count(*) filter (where ${callEvents.dispositionCategory} = 'connected')::int`,
+      wrongTitleOrNumber: sql<number>`count(*) filter (where ${callEvents.dispositionCategory} = 'wrong')::int`,
+    })
+    .from(callEvents)
+    .where(
+      campaignId
+        ? and(eq(callEvents.campaignId, campaignId), isNotNull(callEvents.calledAt))
+        : isNotNull(callEvents.calledAt),
+    )
+    .groupBy(dayExpr)
+    .orderBy(dayExpr);
+
+  return rows.map((r) => ({
+    date: r.date,
+    callsMade: Number(r.callsMade),
+    connects: Number(r.connects),
+    wrongTitleOrNumber: Number(r.wrongTitleOrNumber),
+  }));
 }
 
 // Meeting-outcome / pipeline-progression view (a separate lens from the

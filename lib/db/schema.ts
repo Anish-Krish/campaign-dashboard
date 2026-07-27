@@ -119,6 +119,28 @@ export const contacts = pgTable("contacts", {
   lastSyncedAt: timestamp("last_synced_at"),
 });
 
+// One row per individual HubSpot call (not aggregated) — powers the daily
+// calls/connects chart. `contactId`/`companyId`/`ownerId` are soft
+// references, same rationale as on `contacts`: a call can reference a
+// contact/company/owner that's been deleted or archived in HubSpot, and a
+// hard FK there would abort the whole sync over a single dangling reference.
+export const callEvents = pgTable("call_events", {
+  hubspotCallId: text("hubspot_call_id").primaryKey(),
+  campaignId: integer("campaign_id")
+    .notNull()
+    .references(() => campaigns.id, { onDelete: "cascade" }),
+  contactId: text("contact_id"),
+  companyId: text("company_id"),
+  ownerId: text("owner_id"),
+  dispositionLabel: text("disposition_label"),
+  // Precomputed classification (mirrors classifyDispositionLabel in
+  // lib/sync.ts) so the daily chart query doesn't need fragile string
+  // matching: 'connected' = real Connected* disposition, 'wrong' = Wrong
+  // Title / Wrong Number specifically, 'other' = everything else.
+  dispositionCategory: text("disposition_category").notNull(),
+  calledAt: timestamp("called_at"),
+});
+
 export const syncRuns = pgTable("sync_runs", {
   id: serial("id").primaryKey(),
   startedAt: timestamp("started_at").notNull().defaultNow(),

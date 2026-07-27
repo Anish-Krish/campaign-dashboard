@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { campaignCompanies, companies, contacts, owners, syncRuns } from "@/lib/db/schema";
+import { callEvents, campaignCompanies, companies, contacts, owners, syncRuns } from "@/lib/db/schema";
 import { and, eq, notInArray, sql } from "drizzle-orm";
 import {
   batchReadAssociations,
@@ -29,6 +29,19 @@ const SALES_PIPELINE_ID = "default";
 // which is real, populated, portal data rather than an inferred guess.
 function classifyDispositionLabel(label: string): "connected" | "other" {
   return label.toLowerCase().includes("connect") ? "connected" : "other";
+}
+
+// Finer classification used only for the daily calls/connects chart's
+// call_events rows — separate from classifyDispositionLabel above because
+// "Wrong Title" already counts toward the app-wide Connects total (it
+// contains "connect") and that's unchanged; this just additionally splits
+// out both Wrong Title and Wrong Number as their own bucket for the chart,
+// per the user's request, without altering what "Connects" means elsewhere.
+function classifyForDailyChart(label: string): "connected" | "wrong" | "other" {
+  const l = label.toLowerCase();
+  if (l.includes("wrong title") || l.includes("wrong number")) return "wrong";
+  if (l.includes("connect")) return "connected";
+  return "other";
 }
 
 // hs_lead_status is the authoritative signal for terminal outcomes — verified
@@ -289,13 +302,18 @@ async function syncCampaign(
   // company -> best (outcome, contactId) among authority contacts, ranked by OUTCOME_RANK
   const companyOutcomes = new Map<string, { outcome: Outcome; contactId: string }>();
   const contactRows: (typeof contacts.$inferInsert)[] = [];
+  const callEventRows: (typeof callEvents.$inferInsert)[] = [];
+  const seenCallIds = new Set<string>(); // a call can be associated with >1 contact; dedupe rows by call ID
 
   for (const c of contactRecords) {
     const companyId = contactToCompany.get(c.id)?.[0];
     const isAuthority = isAuthorityTitle(c.properties.jobtitle, authorityKeywords);
 
     const calls = (contactToCalls.get(c.id) ?? [])
-      .map((id) => callsById.get(id))
+      .map((id) => {
+        const props = callsById.get(id);
+        return props ? { id, ...props } : undefined;
+      })
       .filter((v): v is NonNullable<typeof v> => Boolean(v))
       .filter((call) => withinCampaignWindow(call.hs_timestamp, startDate, endDate));
     const meetings = (contactToMeetings.get(c.id) ?? [])
@@ -311,6 +329,22 @@ async function syncCampaign(
       (d) => d.pipeline === "62788164" && d.dealstage && SQO_STAGE_IDS.has(d.dealstage),
     );
     const sqlReached = deals.some((d) => d.pipeline === SALES_PIPELINE_ID);
+
+    for (const call of calls) {
+      if (seenCallIds.has(call.id)) continue;
+      seenCallIds.add(call.id);
+      const label = call.hs_call_disposition ? dispositionLabelById.get(call.hs_call_disposition) : undefined;
+      callEventRows.push({
+        hubspotCallId: call.id,
+        campaignId,
+        contactId: c.id,
+        companyId: companyId ?? null,
+        ownerId: call.hubspot_owner_id ?? null,
+        dispositionLabel: label ?? null,
+        dispositionCategory: classifyForDailyChart(label ?? ""),
+        calledAt: call.hs_timestamp ? new Date(call.hs_timestamp) : null,
+      });
+    }
 
     const connectedCalls = calls.filter(
       (call) =>
@@ -482,6 +516,35 @@ async function syncCampaign(
     }
   }
 
+  for (const batch of chunkArray(callEventRows, 200)) {
+    try {
+      await db
+        .insert(callEvents)
+        .values(batch)
+        .onConflictDoUpdate({
+          target: callEvents.hubspotCallId,
+          set: {
+            campaignId: sql`excluded.campaign_id`,
+            contactId: sql`excluded.contact_id`,
+            companyId: sql`excluded.company_id`,
+            ownerId: sql`excluded.owner_id`,
+            dispositionLabel: sql`excluded.disposition_label`,
+            dispositionCategory: sql`excluded.disposition_category`,
+            calledAt: sql`excluded.called_at`,
+          },
+        });
+    } catch (err) {
+      console.warn(`[sync] call_events batch upsert failed, retrying rows individually:`, err);
+      for (const row of batch) {
+        try {
+          await db.insert(callEvents).values(row).onConflictDoUpdate({ target: callEvents.hubspotCallId, set: row });
+        } catch (rowErr) {
+          console.error(`[sync] call_event ${row.hubspotCallId} upsert failed, skipping:`, rowErr);
+        }
+      }
+    }
+  }
+
   // Reconcile to current list membership: sync only ever upserted contacts
   // that are on the list *right now* — anyone removed from the HubSpot list
   // since the last sync (disqualified, moved off, etc.) would otherwise stay
@@ -501,6 +564,17 @@ async function syncCampaign(
       .delete(campaignCompanies)
       .where(
         and(eq(campaignCompanies.campaignId, campaignId), notInArray(campaignCompanies.companyId, allCompanyIds)),
+      );
+  }
+
+  // Same reconciliation for call events — only guarded the same way, so a
+  // sync that resolved zero calls (e.g. transient fetch issue) can't wipe a
+  // campaign's call history.
+  if (seenCallIds.size > 0) {
+    await db
+      .delete(callEvents)
+      .where(
+        and(eq(callEvents.campaignId, campaignId), notInArray(callEvents.hubspotCallId, [...seenCallIds])),
       );
   }
 }
