@@ -489,11 +489,15 @@ export async function getContactsForMetric(metric: DrillDownMetric, campaignId?:
 // Powers the daily bar chart inside the Calls Made / Connects drill-down
 // popups. `dispositionCategory` is precomputed at sync time (see
 // classifyForDailyChart in lib/sync.ts) so this is a plain grouped count, no
-// string matching here. Grouped in UTC day boundaries — calledAt is stored as
-// a bare timestamp (HubSpot's hs_timestamp), consistent with how the rest of
-// the app treats call/meeting times.
+// string matching here. Grouped in Toronto (America/Toronto) calendar days —
+// the team is in Toronto, and calledAt is stored as a bare UTC-equivalent
+// timestamp (HubSpot's hs_timestamp), so bucketing by raw UTC day previously
+// shifted evening calls onto the wrong day (e.g. an 8pm Toronto call is
+// already past midnight UTC). `AT TIME ZONE 'UTC'` reinterprets the naive
+// timestamp as the UTC instant it represents; the second `AT TIME ZONE`
+// converts that instant to Toronto's wall-clock day, DST-aware.
 export async function getDailyCallStats(campaignId?: number) {
-  const dayExpr = sql`date_trunc('day', ${callEvents.calledAt})`;
+  const dayExpr = sql`date_trunc('day', ${callEvents.calledAt} AT TIME ZONE 'UTC' AT TIME ZONE 'America/Toronto')`;
 
   const rows = await db
     .select({

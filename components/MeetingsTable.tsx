@@ -58,7 +58,9 @@ export function MeetingsTable({ rows }: { rows: MeetingRow[] }) {
               </td>
               <td className="px-4 py-3">{r.meetingOutcomeLabel}</td>
               <td className="px-4 py-3" style={{ color: "var(--text-secondary)" }}>
-                {r.lastMeetingAt ? new Date(r.lastMeetingAt).toLocaleDateString() : "—"}
+                {r.lastMeetingAt
+                  ? new Date(r.lastMeetingAt).toLocaleDateString("en-US", { timeZone: "America/Toronto" })
+                  : "—"}
               </td>
               <td className="px-4 py-3">
                 {r.sqoReached ? (

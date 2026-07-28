@@ -17,6 +17,14 @@ const METRIC_TITLES: Record<DrillDownMetric, string> = {
   meetings: "Meetings Booked",
 };
 
+// Pinned to Toronto (the team's timezone) rather than relying on the
+// viewer's own device — this runs client-side, so left to the browser
+// default it would only be correct for a viewer whose device happens to be
+// set to Eastern time too.
+function formatTorontoTime(iso: string | Date) {
+  return new Date(iso).toLocaleString("en-US", { timeZone: "America/Toronto" });
+}
+
 export function DrillDownStatTile({
   label,
   value,
@@ -176,7 +184,7 @@ export function DrillDownStatTile({
                             ? `${r.callCount} call${r.callCount === 1 ? "" : "s"} · `
                             : ""}
                           {r.dispositionLabel ?? "No disposition logged"}
-                          {r.lastCallAt ? ` · ${new Date(r.lastCallAt).toLocaleString()}` : ""}
+                          {r.lastCallAt ? ` · ${formatTorontoTime(r.lastCallAt)}` : ""}
                         </div>
                       )}
                       {metric === "replies" && r.replyChannel && (
@@ -185,12 +193,12 @@ export function DrillDownStatTile({
                           {r.replyChannel === "Call reply" && r.dispositionLabel
                             ? ` · ${r.dispositionLabel}`
                             : ""}
-                          {r.lastCallAt ? ` · ${new Date(r.lastCallAt).toLocaleString()}` : ""}
+                          {r.lastCallAt ? ` · ${formatTorontoTime(r.lastCallAt)}` : ""}
                         </div>
                       )}
                       {metric === "meetings" && r.lastMeetingAt && (
                         <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-                          {new Date(r.lastMeetingAt).toLocaleString()}
+                          {formatTorontoTime(r.lastMeetingAt)}
                         </div>
                       )}
                       {metric === "enrolled" && r.leadStatus && (

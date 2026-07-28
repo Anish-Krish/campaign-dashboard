@@ -90,6 +90,19 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
 // target), only the calls/meetings/deals/replies used to compute funnel and
 // engagement-status signals are. No startDate configured = no filtering
 // (backward compatible for campaigns that haven't set one).
+// The team is in Toronto — startDate/endDate are calendar days as picked in
+// the campaign form ("July 15" meaning July 15 in Toronto, not UTC). Compares
+// by Toronto calendar-day string rather than raw UTC instants: the previous
+// version parsed startDate as UTC midnight and endDate as the server
+// runtime's local midnight (UTC on Vercel) with no 'Z', which put both
+// boundaries ~4-5 hours off from actual Toronto day boundaries and could
+// mis-bucket evening activity into the wrong day (or the wrong side of the
+// window entirely). Intl.DateTimeFormat handles the EST/EDT switch itself.
+const TORONTO_DATE_FORMAT = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto" });
+function toTorontoDateStr(ms: number): string {
+  return TORONTO_DATE_FORMAT.format(new Date(ms));
+}
+
 function withinCampaignWindow(
   isoDate: string | null | undefined,
   startDate: string | null,
@@ -99,9 +112,10 @@ function withinCampaignWindow(
   if (!isoDate) return false;
   const t = Date.parse(isoDate);
   if (Number.isNaN(t)) return false;
-  if (t < Date.parse(startDate)) return false;
-  const end = endDate ? Date.parse(`${endDate}T23:59:59`) : Date.now();
-  if (t > end) return false;
+  const activityDay = toTorontoDateStr(t);
+  if (activityDay < startDate) return false;
+  const endDay = endDate ?? toTorontoDateStr(Date.now());
+  if (activityDay > endDay) return false;
   return true;
 }
 

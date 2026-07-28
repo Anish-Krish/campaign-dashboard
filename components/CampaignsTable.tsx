@@ -11,9 +11,14 @@ type CampaignRow = {
   status: string;
 };
 
+// startDate/endDate are plain calendar dates with no time component — pin
+// formatting to UTC so the displayed day always matches exactly what's
+// stored, regardless of the server's or viewer's own timezone (without this,
+// `new Date("2026-07-15")` parses as UTC midnight and a negative-UTC-offset
+// viewer would see it roll back to July 14).
 function fmtDate(d: string | null) {
   if (!d) return "—";
-  return new Date(d).toLocaleDateString();
+  return new Date(d).toLocaleDateString("en-US", { timeZone: "UTC" });
 }
 
 export function CampaignsTable({ rows }: { rows: CampaignRow[] }) {

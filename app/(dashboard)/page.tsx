@@ -52,7 +52,7 @@ export default async function DashboardPage() {
         <div className="flex items-center gap-3">
           <p className="text-sm" style={{ color: "var(--text-muted)" }}>
             {lastSync
-              ? `Last synced ${new Date(lastSync.startedAt).toLocaleString()} — ${lastSync.status}`
+              ? `Last synced ${new Date(lastSync.startedAt).toLocaleString("en-US", { timeZone: "America/Toronto" })} — ${lastSync.status}`
               : "No sync has run yet"}
           </p>
           <SyncNowButton />
