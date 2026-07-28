@@ -504,7 +504,10 @@ export async function getDailyCallStats(campaignId?: number) {
       date: sql<string>`to_char(${dayExpr}, 'YYYY-MM-DD')`,
       callsMade: sql<number>`count(*)::int`,
       connects: sql<number>`count(*) filter (where ${callEvents.dispositionCategory} = 'connected')::int`,
-      wrongTitleOrNumber: sql<number>`count(*) filter (where ${callEvents.dispositionCategory} = 'wrong')::int`,
+      // "wrong" here means Wrong Title only — Wrong Number isn't counted in
+      // Connects at all (never actually reached anyone), see
+      // classifyForDailyChart in lib/sync.ts.
+      wrongTitle: sql<number>`count(*) filter (where ${callEvents.dispositionCategory} = 'wrong')::int`,
     })
     .from(callEvents)
     .where(
@@ -519,7 +522,7 @@ export async function getDailyCallStats(campaignId?: number) {
     date: r.date,
     callsMade: Number(r.callsMade),
     connects: Number(r.connects),
-    wrongTitleOrNumber: Number(r.wrongTitleOrNumber),
+    wrongTitle: Number(r.wrongTitle),
   }));
 }
 

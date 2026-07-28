@@ -34,12 +34,14 @@ function classifyDispositionLabel(label: string): "connected" | "other" {
 // Finer classification used only for the daily calls/connects chart's
 // call_events rows — separate from classifyDispositionLabel above because
 // "Wrong Title" already counts toward the app-wide Connects total (it
-// contains "connect") and that's unchanged; this just additionally splits
-// out both Wrong Title and Wrong Number as their own bucket for the chart,
-// per the user's request, without altering what "Connects" means elsewhere.
+// contains "connect") and that's unchanged; this splits it out into its own
+// bucket for the chart. "Wrong number" is deliberately NOT its own bucket
+// here — a wrong number never actually reached anyone, so per the user it
+// shouldn't be counted in Connects at all; it falls into "other" alongside
+// no-answer/voicemail/busy, same as it already does everywhere else in the app.
 function classifyForDailyChart(label: string): "connected" | "wrong" | "other" {
   const l = label.toLowerCase();
-  if (l.includes("wrong title") || l.includes("wrong number")) return "wrong";
+  if (l.includes("wrong title")) return "wrong";
   if (l.includes("connect")) return "connected";
   return "other";
 }

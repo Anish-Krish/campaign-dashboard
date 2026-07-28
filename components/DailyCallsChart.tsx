@@ -6,7 +6,10 @@ export type DailyCallStat = {
   date: string;
   callsMade: number;
   connects: number;
-  wrongTitleOrNumber: number;
+  // Wrong Title only — Wrong Number isn't counted in Connects at all (a
+  // wrong number never actually reached anyone), see classifyForDailyChart
+  // in lib/sync.ts.
+  wrongTitle: number;
 };
 
 const CHART_HEIGHT = 140;
@@ -56,7 +59,7 @@ export function DailyCallsChart({
   const maxValue =
     mode === "calls"
       ? Math.max(1, ...data.map((d) => d.callsMade))
-      : Math.max(1, ...data.map((d) => d.connects + d.wrongTitleOrNumber));
+      : Math.max(1, ...data.map((d) => d.connects + d.wrongTitle));
 
   // Only show as many axis labels as fit with real visual separation between
   // them (~44px), and never more than ~20 regardless — otherwise short date
@@ -65,7 +68,7 @@ export function DailyCallsChart({
 
   const totalCalls = data.reduce((sum, d) => sum + d.callsMade, 0);
   const totalConnects = data.reduce((sum, d) => sum + d.connects, 0);
-  const totalWrong = data.reduce((sum, d) => sum + d.wrongTitleOrNumber, 0);
+  const totalWrong = data.reduce((sum, d) => sum + d.wrongTitle, 0);
   const hovered = hoverIdx != null ? data[hoverIdx] : null;
 
   return (
@@ -78,7 +81,7 @@ export function DailyCallsChart({
           </span>
           <span className="flex items-center gap-1.5">
             <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: "var(--series-red)" }} />
-            Wrong title / number
+            Wrong title
           </span>
         </div>
       )}
@@ -114,9 +117,9 @@ export function DailyCallsChart({
               </span>
               <span>
                 <span className="font-semibold tabular-nums" style={{ color: "var(--series-red)" }}>
-                  {hovered.wrongTitleOrNumber}
+                  {hovered.wrongTitle}
                 </span>{" "}
-                wrong title/number
+                wrong title
               </span>
             </>
           )
@@ -138,7 +141,7 @@ export function DailyCallsChart({
             <span className="font-medium tabular-nums" style={{ color: "var(--series-red)" }}>
               {totalWrong}
             </span>{" "}
-            wrong title/number — hover a bar for a specific day
+            wrong title — hover a bar for a specific day
           </span>
         )}
       </div>
@@ -147,7 +150,7 @@ export function DailyCallsChart({
         <div className="flex items-end" style={{ height: CHART_HEIGHT, gap: BAR_GAP }}>
           {data.map((d, i) => {
             const connectedValue = mode === "calls" ? d.callsMade : d.connects;
-            const wrongValue = mode === "connects" ? d.wrongTitleOrNumber : 0;
+            const wrongValue = mode === "connects" ? d.wrongTitle : 0;
             const connectedH = connectedValue > 0 ? Math.max(2, Math.round((connectedValue / maxValue) * CHART_HEIGHT)) : 0;
             const wrongH = wrongValue > 0 ? Math.max(2, Math.round((wrongValue / maxValue) * CHART_HEIGHT)) : 0;
             const isHovered = hoverIdx === i;
