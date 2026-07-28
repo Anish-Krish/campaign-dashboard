@@ -7,16 +7,16 @@ export function ViewTabs({ tabs }: { tabs: { label: string; content: ReactNode }
 
   return (
     <div>
-      <div className="mb-4 inline-flex rounded-lg border p-1" style={{ borderColor: "var(--border-hairline)" }}>
+      <div className="hud-panel mb-4 inline-flex p-1">
         {tabs.map((t, i) => (
           <button
             key={t.label}
             type="button"
             onClick={() => setActive(i)}
-            className="cursor-pointer rounded px-4 py-1.5 text-sm font-medium transition"
+            className="hud-heading cursor-pointer rounded px-4 py-1.5 text-xs transition"
             style={
               active === i
-                ? { background: "var(--series-blue)", color: "#fff" }
+                ? { background: "var(--series-blue)", color: "#04211f" }
                 : { color: "var(--text-secondary)" }
             }
           >

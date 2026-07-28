@@ -12,13 +12,8 @@ export function EngagementBreakdown({ counts }: { counts: Record<EngagementStatu
   const total = ENGAGEMENT_STATUSES.reduce((sum, s) => sum + counts[s], 0) || 1;
 
   return (
-    <div
-      className="rounded-lg border p-4"
-      style={{ background: "var(--chart-surface)", borderColor: "var(--border-hairline)" }}
-    >
-      <h3 className="mb-4 text-sm font-medium" style={{ color: "var(--text-secondary)" }}>
-        Companies engaged vs. unengaged
-      </h3>
+    <div className="hud-panel p-4">
+      <h3 className="hud-heading mb-4 text-xs">Companies engaged vs. unengaged</h3>
       <div className="space-y-3">
         {ENGAGEMENT_STATUSES.map((status) => {
           const count = counts[status];

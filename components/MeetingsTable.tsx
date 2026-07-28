@@ -13,16 +13,12 @@ type MeetingRow = {
 
 export function MeetingsTable({ rows }: { rows: MeetingRow[] }) {
   return (
-    <div
-      className="overflow-x-auto rounded-lg border"
-      style={{ background: "var(--chart-surface)", borderColor: "var(--border-hairline)" }}
-    >
+    <div className="hud-panel">
+      <div className="overflow-x-auto rounded-lg">
       <table className="w-full text-left text-sm">
         <thead>
-          <tr style={{ color: "var(--text-secondary)" }} className="border-b">
-            <th className="px-4 py-3 font-medium" style={{ borderColor: "var(--border-hairline)" }}>
-              Contact
-            </th>
+          <tr className="hud-heading border-b text-xs" style={{ borderColor: "var(--border-hairline)" }}>
+            <th className="px-4 py-3 font-medium">Contact</th>
             <th className="px-4 py-3 font-medium">Company</th>
             <th className="px-4 py-3 font-medium">Meeting Outcome</th>
             <th className="px-4 py-3 font-medium">Date</th>
@@ -85,6 +81,7 @@ export function MeetingsTable({ rows }: { rows: MeetingRow[] }) {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }

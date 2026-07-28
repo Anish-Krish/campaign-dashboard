@@ -1,24 +1,26 @@
+import { GaugeRing } from "@/components/GaugeRing";
+
 export function StatTile({
   label,
   value,
+  percent,
 }: {
   label: string;
   value: string | number;
+  percent?: number;
 }) {
   return (
-    <div
-      className="rounded-lg border p-4"
-      style={{ background: "var(--chart-surface)", borderColor: "var(--border-hairline)" }}
-    >
-      <div className="text-sm" style={{ color: "var(--text-secondary)" }}>
-        {label}
+    <div className="hud-panel flex items-center justify-between gap-3 p-4">
+      <div>
+        <div className="hud-heading text-xs">{label}</div>
+        <div
+          className="mt-1 text-3xl font-semibold tabular-nums"
+          style={{ color: "var(--text-primary)" }}
+        >
+          {value}
+        </div>
       </div>
-      <div
-        className="mt-1 text-3xl font-semibold tabular-nums"
-        style={{ color: "var(--text-primary)" }}
-      >
-        {value}
-      </div>
+      {percent != null && <GaugeRing percent={percent} />}
     </div>
   );
 }

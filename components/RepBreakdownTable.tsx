@@ -12,16 +12,12 @@ export function RepBreakdownTable({ rows }: { rows: RepRow[] }) {
   const maxEnrolled = Math.max(1, ...rows.map((r) => r.enrolled));
 
   return (
-    <div
-      className="overflow-x-auto rounded-lg border"
-      style={{ background: "var(--chart-surface)", borderColor: "var(--border-hairline)" }}
-    >
+    <div className="hud-panel">
+      <div className="overflow-x-auto rounded-lg">
       <table className="w-full text-left text-sm">
         <thead>
-          <tr style={{ color: "var(--text-secondary)" }} className="border-b" >
-            <th className="px-4 py-3 font-medium" style={{ borderColor: "var(--border-hairline)" }}>
-              Rep
-            </th>
+          <tr className="hud-heading border-b text-xs" style={{ borderColor: "var(--border-hairline)" }}>
+            <th className="px-4 py-3 font-medium">Rep</th>
             <th className="px-4 py-3 font-medium">Enrolled</th>
             <th className="px-4 py-3 font-medium">Calls Made</th>
             <th className="px-4 py-3 font-medium">Connects</th>
@@ -65,6 +61,7 @@ export function RepBreakdownTable({ rows }: { rows: RepRow[] }) {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }

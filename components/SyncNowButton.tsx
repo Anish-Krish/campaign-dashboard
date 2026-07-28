@@ -11,8 +11,7 @@ export function SyncNowButton() {
       type="button"
       disabled={isPending}
       onClick={() => startTransition(() => triggerSyncNow())}
-      className="rounded border px-3 py-1.5 text-sm hover:bg-white/5 disabled:opacity-50"
-      style={{ borderColor: "var(--border-hairline)", color: "var(--text-secondary)" }}
+      className="hud-button rounded px-3 py-1.5 text-xs"
     >
       {isPending ? "Syncing…" : "Sync now"}
     </button>

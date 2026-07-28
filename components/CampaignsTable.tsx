@@ -18,16 +18,12 @@ function fmtDate(d: string | null) {
 
 export function CampaignsTable({ rows }: { rows: CampaignRow[] }) {
   return (
-    <div
-      className="overflow-x-auto rounded-lg border"
-      style={{ background: "var(--chart-surface)", borderColor: "var(--border-hairline)" }}
-    >
+    <div className="hud-panel">
+      <div className="overflow-x-auto rounded-lg">
       <table className="w-full text-left text-sm">
         <thead>
-          <tr style={{ color: "var(--text-secondary)" }} className="border-b">
-            <th className="px-4 py-3 font-medium" style={{ borderColor: "var(--border-hairline)" }}>
-              Campaign Name
-            </th>
+          <tr className="hud-heading border-b text-xs" style={{ borderColor: "var(--border-hairline)" }}>
+            <th className="px-4 py-3 font-medium">Campaign Name</th>
             <th className="px-4 py-3 font-medium">Owner</th>
             <th className="px-4 py-3 font-medium">Target</th>
             <th className="px-4 py-3 font-medium">Delivered</th>
@@ -78,6 +74,7 @@ export function CampaignsTable({ rows }: { rows: CampaignRow[] }) {
           })}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }

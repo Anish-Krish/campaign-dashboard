@@ -262,11 +262,12 @@ async function syncCampaign(
       hs_timestamp?: string;
       hubspot_owner_id?: string;
     }>("calls", allCallIds, ["hs_call_disposition", "hs_timestamp", "hubspot_owner_id"]),
-    safeBatchReadObjects<{ hs_timestamp?: string; hubspot_owner_id?: string; hs_meeting_outcome?: string }>(
-      "meetings",
-      allMeetingIds,
-      ["hs_timestamp", "hubspot_owner_id", "hs_meeting_outcome"],
-    ),
+    safeBatchReadObjects<{
+      hs_timestamp?: string;
+      hs_createdate?: string;
+      hubspot_owner_id?: string;
+      hs_meeting_outcome?: string;
+    }>("meetings", allMeetingIds, ["hs_timestamp", "hs_createdate", "hubspot_owner_id", "hs_meeting_outcome"]),
     safeBatchReadObjects<{ pipeline?: string; dealstage?: string; createdate?: string }>(
       "deals",
       allDealIds,
@@ -316,10 +317,16 @@ async function syncCampaign(
       })
       .filter((v): v is NonNullable<typeof v> => Boolean(v))
       .filter((call) => withinCampaignWindow(call.hs_timestamp, startDate, endDate));
+    // Scoped by hs_createdate (when the meeting was booked), not hs_timestamp
+    // (when it's scheduled to occur) — unlike a call, a meeting is routinely
+    // booked during the campaign for a date weeks out, which can land past
+    // the campaign's end date and wrongly exclude a meeting that was very
+    // much a result of working this campaign. Matches how deals are already
+    // scoped by createdate, not close date, below.
     const meetings = (contactToMeetings.get(c.id) ?? [])
       .map((id) => meetingsById.get(id))
       .filter((v): v is NonNullable<typeof v> => Boolean(v))
-      .filter((m) => withinCampaignWindow(m.hs_timestamp, startDate, endDate));
+      .filter((m) => withinCampaignWindow(m.hs_createdate, startDate, endDate));
     const deals = (contactToDeals.get(c.id) ?? [])
       .map((id) => dealsById.get(id))
       .filter((v): v is NonNullable<typeof v> => Boolean(v))
@@ -405,11 +412,19 @@ async function syncCampaign(
       lastSyncedAt: new Date(),
     });
 
-    if (!isAuthority || !companyId) continue;
+    if (!companyId) continue;
+    if (!isAuthority && !meetingBooked) continue;
 
+    // A booked meeting counts toward company engagement regardless of who at
+    // the company took it — it's the highest-ranked outcome and an
+    // unambiguous engagement signal even from a non-authority contact (e.g.
+    // an accounting manager). Every other outcome is a lead-status guess and
+    // stays gated to authority contacts only.
     const outcome: Outcome | null = meetingBooked
       ? "meeting_booked"
-      : outcomeFromLeadStatus(c.properties.hs_lead_status);
+      : isAuthority
+        ? outcomeFromLeadStatus(c.properties.hs_lead_status)
+        : null;
 
     if (outcome) {
       const existing = companyOutcomes.get(companyId);

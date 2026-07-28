@@ -7,15 +7,15 @@ export default function LoginPage() {
   const [state, formAction, pending] = useActionState(login, undefined);
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-neutral-950 px-4">
-      <form
-        action={formAction}
-        className="w-full max-w-sm rounded-lg border border-neutral-800 bg-neutral-900 p-8"
-      >
-        <h1 className="mb-6 text-xl font-semibold text-neutral-100">
+    <div className="flex min-h-screen items-center justify-center px-4" style={{ background: "var(--background)" }}>
+      <form action={formAction} className="hud-panel w-full max-w-sm p-8">
+        <h1 className="hud-heading mb-1 text-sm" style={{ color: "var(--series-blue)" }}>
           Campaign Dashboard
         </h1>
-        <label className="mb-1 block text-sm text-neutral-400" htmlFor="password">
+        <p className="mb-6 text-xs" style={{ color: "var(--text-muted)" }}>
+          Authorization required
+        </p>
+        <label className="hud-heading mb-1 block text-xs" style={{ color: "var(--text-secondary)" }} htmlFor="password">
           Team password
         </label>
         <input
@@ -24,16 +24,15 @@ export default function LoginPage() {
           type="password"
           required
           autoFocus
-          className="mb-4 w-full rounded border border-neutral-700 bg-neutral-800 px-3 py-2 text-neutral-100 outline-none focus:border-blue-500"
+          className="mb-4 w-full rounded border bg-transparent px-3 py-2 outline-none"
+          style={{ borderColor: "var(--border-hairline)", color: "var(--text-primary)" }}
         />
         {state?.error && (
-          <p className="mb-4 text-sm text-red-400">{state.error}</p>
+          <p className="mb-4 text-sm" style={{ color: "var(--series-red)" }}>
+            {state.error}
+          </p>
         )}
-        <button
-          type="submit"
-          disabled={pending}
-          className="w-full rounded bg-blue-600 px-3 py-2 font-medium text-white hover:bg-blue-500 disabled:opacity-50"
-        >
+        <button type="submit" disabled={pending} className="hud-button w-full rounded px-3 py-2 text-xs">
           {pending ? "Signing in…" : "Sign in"}
         </button>
       </form>

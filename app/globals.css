@@ -18,7 +18,14 @@
   --status-serious: #ec835a;
   --status-critical: #d03b3b;
 
-  --series-blue: #3987e5;
+  /* Jarvis/HUD accent — was #3987e5, swapped for a cyan validated with the
+     dataviz skill's validate_palette.js against the full categorical set
+     (passes lightness/chroma/contrast, introduces no new CVD failures beyond
+     two pre-existing all-pairs issues unrelated to this token). Doubles as
+     both the chrome accent (borders, glow, buttons, active states) and the
+     "primary" data-series slot (meeting_booked, connected calls) — one token,
+     so chrome and data read as the same color everywhere. */
+  --series-blue: #0ea5b7;
   --series-aqua: #199e70;
   --series-yellow: #c98500;
   --series-green: #008300;
@@ -26,6 +33,9 @@
   --series-red: #e66767;
   --series-magenta: #d55181;
   --series-orange: #d95926;
+
+  --glow-cyan-soft: rgba(14, 165, 183, 0.16);
+  --glow-cyan-strong: rgba(14, 165, 183, 0.4);
 }
 
 @theme inline {
@@ -36,6 +46,89 @@
 }
 
 body {
-  background: var(--background);
+  background:
+    radial-gradient(ellipse 80% 40% at 50% -10%, rgba(14, 165, 183, 0.07), transparent 60%),
+    linear-gradient(rgba(14, 165, 183, 0.035) 1px, transparent 1px) 0 0 / 100% 32px,
+    linear-gradient(90deg, rgba(14, 165, 183, 0.035) 1px, transparent 1px) 0 0 / 32px 100%,
+    var(--background);
   color: var(--foreground);
+}
+
+/* HUD panel — the shared card treatment: cyan-tinted border, soft outer glow,
+   and two opposite-corner brackets (pure CSS, no images). Replaces the
+   repeated `rounded-lg border` + chart-surface/border-hairline inline-style
+   pattern used by every panel component. */
+.hud-panel {
+  position: relative;
+  background: var(--chart-surface);
+  border: 1px solid rgba(14, 165, 183, 0.25);
+  border-radius: 0.5rem;
+  box-shadow: 0 0 0 1px rgba(14, 165, 183, 0.03) inset, 0 0 20px var(--glow-cyan-soft);
+}
+.hud-panel::before,
+.hud-panel::after {
+  content: "";
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  pointer-events: none;
+}
+.hud-panel::before {
+  top: -1px;
+  left: -1px;
+  border-top: 2px solid var(--series-blue);
+  border-left: 2px solid var(--series-blue);
+}
+.hud-panel::after {
+  bottom: -1px;
+  right: -1px;
+  border-bottom: 2px solid var(--series-blue);
+  border-right: 2px solid var(--series-blue);
+}
+
+/* HUD section heading — terminal-style label above a panel's content. Only
+   for short labels/headings, never numeric values (those stay proportional
+   per the dataviz skill's figure guidance). */
+.hud-heading {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+
+/* HUD button — replaces the plain `rounded border` button style used for
+   Sync Now / Log out / view tabs. */
+.hud-button {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border: 1px solid rgba(14, 165, 183, 0.35);
+  background: rgba(14, 165, 183, 0.06);
+  color: var(--series-blue);
+  transition: background 150ms ease, box-shadow 150ms ease;
+}
+.hud-button:hover:not(:disabled) {
+  background: rgba(14, 165, 183, 0.16);
+  box-shadow: 0 0 12px var(--glow-cyan-strong);
+}
+.hud-button:disabled {
+  opacity: 0.5;
+}
+
+@keyframes hud-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--series-blue) !important;
+  box-shadow: 0 0 0 2px var(--glow-cyan-soft);
 }

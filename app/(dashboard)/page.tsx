@@ -138,7 +138,11 @@ export default async function DashboardPage() {
                   <StatTile label="Needs Rebooked" value={meetingStats.needsRebooked} />
                   <StatTile label="SQO" value={meetingStats.sqo} />
                   <StatTile label="SQL" value={meetingStats.sql} />
-                  <StatTile label="Meeting Sat vs SQO" value={`${meetingStats.meetingSatVsSqoPercent}%`} />
+                  <StatTile
+                    label="Meeting Sat vs SQO"
+                    value={`${meetingStats.meetingSatVsSqoPercent}%`}
+                    percent={meetingStats.meetingSatVsSqoPercent}
+                  />
                 </StatTileRow>
                 <MeetingsTable rows={meetingsList} />
               </div>

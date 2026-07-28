@@ -100,6 +100,12 @@ export async function deleteCampaign(formData: FormData) {
   revalidatePath("/");
 }
 
+// isAuthority is computed and stored per contact at sync time (see
+// isAuthorityTitle in lib/sync.ts), not derived live from the keyword list —
+// so without a resync here, saving new keywords would silently do nothing
+// until whatever campaign happened to sync next. Runs across every campaign
+// (best-effort, same as syncCampaignSafely above) since a keyword change can
+// reclassify contacts anywhere.
 export async function saveAuthorityKeywords(formData: FormData) {
   const raw = str(formData, "keywords") ?? "";
   const keywords = raw
@@ -108,5 +114,14 @@ export async function saveAuthorityKeywords(formData: FormData) {
     .filter(Boolean);
 
   await setAuthorityKeywords(keywords);
+
+  try {
+    await runSyncJob();
+  } catch (err) {
+    console.error("[settings] post-keyword-save resync failed:", err);
+  }
+
   revalidatePath("/settings");
+  revalidatePath("/campaigns");
+  revalidatePath("/");
 }

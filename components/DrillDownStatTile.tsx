@@ -51,13 +51,9 @@ export function DrillDownStatTile({
       <button
         type="button"
         onClick={handleOpen}
-        className="group cursor-pointer rounded-lg border p-4 text-left transition hover:border-[var(--series-blue)] hover:brightness-110"
-        style={{ background: "var(--chart-surface)", borderColor: "var(--border-hairline)" }}
+        className="hud-panel group cursor-pointer p-4 text-left transition hover:brightness-125"
       >
-        <div
-          className="flex items-center justify-between text-sm"
-          style={{ color: "var(--text-secondary)" }}
-        >
+        <div className="hud-heading flex items-center justify-between text-xs">
           {label}
           <span
             className="opacity-0 transition group-hover:opacity-100"
@@ -80,15 +76,15 @@ export function DrillDownStatTile({
           onClick={() => setOpen(false)}
         >
           <div
-            className={`max-h-[80vh] w-full overflow-hidden rounded-lg border ${showDailyChart ? "max-w-3xl" : "max-w-2xl"}`}
-            style={{ background: "var(--chart-surface)", borderColor: "var(--border-hairline)" }}
+            className={`hud-panel max-h-[80vh] w-full ${showDailyChart ? "max-w-3xl" : "max-w-2xl"}`}
             onClick={(e) => e.stopPropagation()}
           >
+            <div className="flex max-h-[80vh] flex-col overflow-hidden rounded-lg">
             <div
               className="flex items-center justify-between border-b px-5 py-4"
               style={{ borderColor: "var(--gridline)" }}
             >
-              <h3 className="text-lg font-medium" style={{ color: "var(--text-primary)" }}>
+              <h3 className="hud-heading text-base" style={{ color: "var(--text-primary)" }}>
                 {METRIC_TITLES[metric]}
                 {rows && metric === "calls"
                   ? ` (${rows.length} contacts, ${rows.reduce((sum, r) => sum + (r.callCount ?? 0), 0)} calls)`
@@ -99,8 +95,7 @@ export function DrillDownStatTile({
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                className="rounded px-2 py-1 text-sm hover:bg-white/10"
-                style={{ color: "var(--text-secondary)" }}
+                className="hud-button rounded px-2 py-1 text-xs"
               >
                 Close
               </button>
@@ -207,6 +202,7 @@ export function DrillDownStatTile({
                   ))}
                 </ul>
               )}
+            </div>
             </div>
           </div>
         </div>

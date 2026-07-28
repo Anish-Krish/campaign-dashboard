@@ -25,14 +25,15 @@ export function CompanyCallFrequency({
       <StatTileRow>
         <StatTile label="Companies Enrolled" value={summary.companiesEnrolled} />
         <StatTile label="Authority Contact Reached ≥1x" value={summary.companiesContacted} />
-        <StatTile label="Contact Rate" value={`${summary.contactRatePercent}%`} />
+        <StatTile
+          label="Contact Rate"
+          value={`${summary.contactRatePercent}%`}
+          percent={summary.contactRatePercent}
+        />
       </StatTileRow>
 
-      <div
-        className="rounded-lg border p-4"
-        style={{ background: "var(--chart-surface)", borderColor: "var(--border-hairline)" }}
-      >
-        <h3 className="mb-4 text-sm font-medium" style={{ color: "var(--text-secondary)" }}>
+      <div className="hud-panel p-4">
+        <h3 className="hud-heading mb-4 text-xs">
           Calls to authority contact (of {summary.companiesEnrolled} enrolled {summary.companiesEnrolled === 1 ? "company" : "companies"})
         </h3>
         <div className="space-y-3">

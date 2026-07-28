@@ -19,7 +19,6 @@ const STATUS_COLORS: Record<EngagementStatus, string> = {
 type SortKey = "company" | "industry" | "contacts" | "calls" | "status";
 type EnrolledFilter = "all" | "enrolled" | "not_enrolled";
 
-const cardStyle = { background: "var(--chart-surface)", borderColor: "var(--border-hairline)" };
 const inputStyle = { borderColor: "var(--border-hairline)", color: "var(--text-primary)" };
 
 function Pill({
@@ -307,7 +306,7 @@ export function CompaniesExplorer({
 
   return (
     <div className="space-y-4">
-      <div className="space-y-3 rounded-lg border p-4" style={cardStyle}>
+      <div className="hud-panel space-y-3 p-4">
         <div className="flex flex-wrap items-center gap-3">
           <input
             type="text"
@@ -402,14 +401,12 @@ export function CompaniesExplorer({
         </p>
       </div>
 
-      <div
-        className="overflow-x-auto rounded-lg border"
-        style={{ background: "var(--chart-surface)", borderColor: "var(--border-hairline)" }}
-      >
+      <div className="hud-panel">
+      <div className="overflow-x-auto rounded-lg">
         <table className="w-full text-left text-sm">
           <thead>
-            <tr style={{ color: "var(--text-secondary)" }} className="border-b">
-              <th className="px-4 py-3" style={{ borderColor: "var(--border-hairline)" }} />
+            <tr className="hud-heading border-b text-xs" style={{ borderColor: "var(--border-hairline)" }}>
+              <th className="px-4 py-3" />
               <SortHeader
                 label="Company"
                 sortKey="company"
@@ -470,6 +467,7 @@ export function CompaniesExplorer({
           </tbody>
         </table>
       </div>
+      </div>
 
       <div className="flex items-center justify-between text-sm" style={{ color: "var(--text-secondary)" }}>
         <div className="flex items-center gap-2">
@@ -493,8 +491,7 @@ export function CompaniesExplorer({
             type="button"
             disabled={currentPage <= 1}
             onClick={() => setPage((p) => Math.max(1, p - 1))}
-            className="cursor-pointer rounded border px-3 py-1 disabled:cursor-not-allowed disabled:opacity-40"
-            style={inputStyle}
+            className="hud-button cursor-pointer rounded px-3 py-1 text-xs disabled:cursor-not-allowed"
           >
             Prev
           </button>
@@ -505,8 +502,7 @@ export function CompaniesExplorer({
             type="button"
             disabled={currentPage >= totalPages}
             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            className="cursor-pointer rounded border px-3 py-1 disabled:cursor-not-allowed disabled:opacity-40"
-            style={inputStyle}
+            className="hud-button cursor-pointer rounded px-3 py-1 text-xs disabled:cursor-not-allowed"
           >
             Next
           </button>
