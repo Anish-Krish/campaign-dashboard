@@ -84,6 +84,16 @@ export default async function CampaignDetailPage({
           metric="meetings"
           campaignId={campaignId}
         />
+        <StatTile
+          label="Connect → Meeting Rate"
+          value={`${funnel.connectToMeetingRate}%`}
+          percent={funnel.connectToMeetingRate}
+        />
+        <StatTile
+          label="Conversation → Meeting Rate"
+          value={`${funnel.conversationToMeetingRate}%`}
+          percent={funnel.conversationToMeetingRate}
+        />
       </StatTileRow>
 
       <ViewTabs

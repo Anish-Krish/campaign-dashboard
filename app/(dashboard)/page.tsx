@@ -74,6 +74,16 @@ export default async function DashboardPage() {
         <DrillDownStatTile label="Connects" value={funnel.connects} metric="connects" />
         <DrillDownStatTile label="Replies" value={funnel.replies} metric="replies" />
         <DrillDownStatTile label="Meetings Booked" value={funnel.meetings} metric="meetings" />
+        <StatTile
+          label="Connect → Meeting Rate"
+          value={`${funnel.connectToMeetingRate}%`}
+          percent={funnel.connectToMeetingRate}
+        />
+        <StatTile
+          label="Conversation → Meeting Rate"
+          value={`${funnel.conversationToMeetingRate}%`}
+          percent={funnel.conversationToMeetingRate}
+        />
       </StatTileRow>
 
       <ViewTabs

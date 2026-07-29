@@ -1,5 +1,14 @@
 import { db } from "@/lib/db";
-import { callEvents, campaignCompanies, campaigns, companies, contacts, owners, syncRuns } from "@/lib/db/schema";
+import {
+  callEvents,
+  campaignCompanies,
+  campaigns,
+  companies,
+  contacts,
+  meetingEvents,
+  owners,
+  syncRuns,
+} from "@/lib/db/schema";
 import { alias } from "drizzle-orm/pg-core";
 import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { hubspotContactUrl } from "@/lib/hubspot";
@@ -42,6 +51,10 @@ export async function getFunnelCounts(campaignId?: number) {
       // made this look like it barely moved on a day with 100+ real dials.
       callsMade: sql<number>`coalesce(sum(${contacts.callCount}), 0)`.mapWith(Number),
       connects: sql<number>`count(*) filter (where ${contacts.lastCallConnected})`.mapWith(Number),
+      // Strict subset of connects — a real back-and-forth (Pitch/Past
+      // Pitch/Meeting dispositions), not just a pickup. Powers "Conversation
+      // → Meeting Rate"; see hadConversation in lib/db/schema.ts.
+      conversations: sql<number>`count(*) filter (where ${contacts.hadConversation})`.mapWith(Number),
       replies: sql<number>`count(*) filter (where ${contacts.hasGenuineReply})`.mapWith(Number),
       meetings: sql<number>`count(*) filter (where ${contacts.meetingBooked})`.mapWith(Number),
     })
@@ -72,12 +85,21 @@ export async function getFunnelCounts(campaignId?: number) {
     .from(campaignCompanies)
     .where(companyWhere);
 
+  const connects = contactAgg?.connects ?? 0;
+  const conversations = contactAgg?.conversations ?? 0;
+  const meetings = contactAgg?.meetings ?? 0;
+
   return {
     enrolled: contactAgg?.enrolled ?? 0,
     callsMade: contactAgg?.callsMade ?? 0,
-    connects: contactAgg?.connects ?? 0,
+    connects,
+    conversations,
     replies: contactAgg?.replies ?? 0,
-    meetings: contactAgg?.meetings ?? 0,
+    meetings,
+    // Rounded to the nearest whole percent for tile display; 0 with a
+    // zero denominator rather than NaN/Infinity.
+    connectToMeetingRate: connects > 0 ? Math.round((meetings / connects) * 100) : 0,
+    conversationToMeetingRate: conversations > 0 ? Math.round((meetings / conversations) * 100) : 0,
     companiesTargeted: companyAgg?.companiesTargeted ?? 0,
     companiesEnrolled: companyAgg?.companiesEnrolled ?? 0,
     companiesEngaged: companyAgg?.companiesEngaged ?? 0,
@@ -608,5 +630,98 @@ export async function getMeetingsList(campaignId?: number) {
     sqlReached: r.sqlReached,
     ownerName: r.meetingOwnerName ?? "Unassigned",
     hubspotUrl: hubspotContactUrl(r.hubspotContactId),
+  }));
+}
+
+// Reps with actual logged activity — not every HubSpot user (owners gets
+// synced from the full portal user list, including people who never worked
+// a campaign), so this joins against call_events/meeting_events instead of
+// just listing the owners table.
+export async function getActiveReps() {
+  const rows = await db.execute<{ owner_id: string; owner_name: string | null }>(sql`
+    select distinct o.hubspot_owner_id as owner_id, o.name as owner_name
+    from owners o
+    where o.hubspot_owner_id in (
+      select owner_id from call_events where owner_id is not null
+      union
+      select owner_id from meeting_events where owner_id is not null
+    )
+    order by o.name
+  `);
+  return rows.map((r) => ({ ownerId: r.owner_id, ownerName: r.owner_name ?? "Unassigned" }));
+}
+
+const CONVERSATION_LABELS_SQL = sql`('Connected - 01 - Pitch', 'Connected - 02 - Past Pitch', 'Connected - 03 - Meeting')`;
+
+// The per-rep, cross-campaign, date-range-bounded view — powers the /reps
+// page. Unlike getFunnelCounts (bound to a single campaign's fixed sync
+// window via contacts' snapshot columns), this reads call_events/
+// meeting_events directly: real per-event timestamps and owners, so an
+// arbitrary Toronto-day range works correctly across every campaign the rep
+// has touched. Connects/conversations/meetings count DISTINCT contacts
+// (matching how those same metrics are already defined everywhere else in
+// the app — one qualifying contact, not one qualifying event); Calls Made
+// stays a raw event count (total dial attempts), matching the existing
+// "Calls Made" definition.
+export async function getRepRangeStats(ownerId: string, range: { startDate: string; endDate: string }) {
+  const callDayFilter = sql`to_char(date_trunc('day', ${callEvents.calledAt} AT TIME ZONE 'UTC' AT TIME ZONE 'America/Toronto'), 'YYYY-MM-DD') between ${range.startDate} and ${range.endDate}`;
+  const meetingDayFilter = sql`to_char(date_trunc('day', ${meetingEvents.meetingAt} AT TIME ZONE 'UTC' AT TIME ZONE 'America/Toronto'), 'YYYY-MM-DD') between ${range.startDate} and ${range.endDate}`;
+
+  const [callAgg] = await db
+    .select({
+      callsMade: sql<number>`count(*)::int`,
+      connects: sql<number>`count(distinct ${callEvents.contactId}) filter (where ${callEvents.dispositionCategory} = 'connected')::int`,
+      conversations: sql<number>`count(distinct ${callEvents.contactId}) filter (where ${callEvents.dispositionLabel} in ${CONVERSATION_LABELS_SQL})::int`,
+    })
+    .from(callEvents)
+    .where(and(eq(callEvents.ownerId, ownerId), isNotNull(callEvents.calledAt), callDayFilter));
+
+  const [meetingAgg] = await db
+    .select({ meetings: sql<number>`count(distinct ${meetingEvents.contactId})::int` })
+    .from(meetingEvents)
+    .where(and(eq(meetingEvents.ownerId, ownerId), isNotNull(meetingEvents.meetingAt), meetingDayFilter));
+
+  const connects = callAgg?.connects ?? 0;
+  const conversations = callAgg?.conversations ?? 0;
+  const meetings = meetingAgg?.meetings ?? 0;
+
+  return {
+    callsMade: callAgg?.callsMade ?? 0,
+    connects,
+    conversations,
+    meetings,
+    connectToMeetingRate: connects > 0 ? Math.round((meetings / connects) * 100) : 0,
+    conversationToMeetingRate: conversations > 0 ? Math.round((meetings / conversations) * 100) : 0,
+  };
+}
+
+// Same shape as getDailyCallStats, filtered by owner + date range instead of
+// campaign — lets the rep page reuse DailyCallsChart unchanged.
+export async function getRepDailyCallStats(ownerId: string, range: { startDate: string; endDate: string }) {
+  const dayExpr = sql`date_trunc('day', ${callEvents.calledAt} AT TIME ZONE 'UTC' AT TIME ZONE 'America/Toronto')`;
+
+  const rows = await db
+    .select({
+      date: sql<string>`to_char(${dayExpr}, 'YYYY-MM-DD')`,
+      callsMade: sql<number>`count(*)::int`,
+      connects: sql<number>`count(*) filter (where ${callEvents.dispositionCategory} = 'connected')::int`,
+      wrongTitle: sql<number>`count(*) filter (where ${callEvents.dispositionCategory} = 'wrong')::int`,
+    })
+    .from(callEvents)
+    .where(
+      and(
+        eq(callEvents.ownerId, ownerId),
+        isNotNull(callEvents.calledAt),
+        sql`to_char(${dayExpr}, 'YYYY-MM-DD') between ${range.startDate} and ${range.endDate}`,
+      ),
+    )
+    .groupBy(dayExpr)
+    .orderBy(dayExpr);
+
+  return rows.map((r) => ({
+    date: r.date,
+    callsMade: Number(r.callsMade),
+    connects: Number(r.connects),
+    wrongTitle: Number(r.wrongTitle),
   }));
 }

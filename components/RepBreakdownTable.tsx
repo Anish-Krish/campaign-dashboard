@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 type RepRow = {
   ownerId: string | null;
   ownerName: string;
@@ -49,7 +51,13 @@ export function RepBreakdownTable({ rows }: { rows: RepRow[] }) {
                     }}
                     aria-hidden
                   />
-                  {r.ownerName}
+                  {r.ownerId ? (
+                    <Link href={`/reps/${r.ownerId}`} className="hover:underline" style={{ color: "var(--series-blue)" }}>
+                      {r.ownerName}
+                    </Link>
+                  ) : (
+                    r.ownerName
+                  )}
                 </div>
               </td>
               <td className="px-4 py-3 tabular-nums">{r.enrolled}</td>

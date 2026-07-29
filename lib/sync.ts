@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { callEvents, campaignCompanies, companies, contacts, owners, syncRuns } from "@/lib/db/schema";
+import { callEvents, campaignCompanies, companies, contacts, meetingEvents, owners, syncRuns } from "@/lib/db/schema";
 import { and, eq, notInArray, sql } from "drizzle-orm";
 import {
   batchReadAssociations,
@@ -9,6 +9,7 @@ import {
   listOwners,
 } from "@/lib/hubspot";
 import { getAuthorityKeywords, isAuthorityTitle } from "@/lib/authority";
+import { toTorontoDateStr } from "@/lib/timezone";
 
 type Outcome = "not_interested" | "unqualified" | "activated_lead" | "meeting_booked";
 
@@ -44,6 +45,21 @@ function classifyForDailyChart(label: string): "connected" | "wrong" | "other" {
   if (l.includes("wrong title")) return "wrong";
   if (l.includes("connect")) return "connected";
   return "other";
+}
+
+// "Had a real conversation" — a strict subset of "connected" (per the user):
+// bare "Connected" just means someone picked up, and "Connected - 04 - Wrong
+// Title" means the pickup was the wrong person. These three specifically are
+// dispositions the rep would only log after an actual back-and-forth.
+// Exact-match against known portal labels (confirmed live via
+// GET /calling/v1/dispositions), not substring matching.
+const CONVERSATION_LABELS = new Set([
+  "Connected - 01 - Pitch",
+  "Connected - 02 - Past Pitch",
+  "Connected - 03 - Meeting",
+]);
+function isConversation(label: string): boolean {
+  return CONVERSATION_LABELS.has(label);
 }
 
 // hs_lead_status is the authoritative signal for terminal outcomes — verified
@@ -92,19 +108,14 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
 // target), only the calls/meetings/deals/replies used to compute funnel and
 // engagement-status signals are. No startDate configured = no filtering
 // (backward compatible for campaigns that haven't set one).
-// The team is in Toronto — startDate/endDate are calendar days as picked in
-// the campaign form ("July 15" meaning July 15 in Toronto, not UTC). Compares
-// by Toronto calendar-day string rather than raw UTC instants: the previous
-// version parsed startDate as UTC midnight and endDate as the server
-// runtime's local midnight (UTC on Vercel) with no 'Z', which put both
-// boundaries ~4-5 hours off from actual Toronto day boundaries and could
-// mis-bucket evening activity into the wrong day (or the wrong side of the
-// window entirely). Intl.DateTimeFormat handles the EST/EDT switch itself.
-const TORONTO_DATE_FORMAT = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto" });
-function toTorontoDateStr(ms: number): string {
-  return TORONTO_DATE_FORMAT.format(new Date(ms));
-}
-
+// startDate/endDate are calendar days as picked in the campaign form ("July
+// 15" meaning July 15 in Toronto, not UTC) — compared by Toronto
+// calendar-day string (see lib/timezone.ts) rather than raw UTC instants:
+// the previous version parsed startDate as UTC midnight and endDate as the
+// server runtime's local midnight (UTC on Vercel) with no 'Z', which put
+// both boundaries ~4-5 hours off from actual Toronto day boundaries and
+// could mis-bucket evening activity into the wrong day (or the wrong side
+// of the window entirely).
 function withinCampaignWindow(
   isoDate: string | null | undefined,
   startDate: string | null,
@@ -321,6 +332,8 @@ async function syncCampaign(
   const contactRows: (typeof contacts.$inferInsert)[] = [];
   const callEventRows: (typeof callEvents.$inferInsert)[] = [];
   const seenCallIds = new Set<string>(); // a call can be associated with >1 contact; dedupe rows by call ID
+  const meetingEventRows: (typeof meetingEvents.$inferInsert)[] = [];
+  const seenMeetingIds = new Set<string>(); // same dedupe rationale as calls
 
   for (const c of contactRecords) {
     const companyId = contactToCompany.get(c.id)?.[0];
@@ -340,7 +353,10 @@ async function syncCampaign(
     // much a result of working this campaign. Matches how deals are already
     // scoped by createdate, not close date, below.
     const meetings = (contactToMeetings.get(c.id) ?? [])
-      .map((id) => meetingsById.get(id))
+      .map((id) => {
+        const props = meetingsById.get(id);
+        return props ? { id, ...props } : undefined;
+      })
       .filter((v): v is NonNullable<typeof v> => Boolean(v))
       .filter((m) => withinCampaignWindow(m.hs_createdate, startDate, endDate));
     const deals = (contactToDeals.get(c.id) ?? [])
@@ -369,6 +385,20 @@ async function syncCampaign(
       });
     }
 
+    for (const meeting of meetings) {
+      if (seenMeetingIds.has(meeting.id)) continue;
+      seenMeetingIds.add(meeting.id);
+      meetingEventRows.push({
+        hubspotMeetingId: meeting.id,
+        campaignId,
+        contactId: c.id,
+        companyId: companyId ?? null,
+        ownerId: meeting.hubspot_owner_id ?? null,
+        outcome: meeting.hs_meeting_outcome ?? null,
+        meetingAt: meeting.hs_timestamp ? new Date(meeting.hs_timestamp) : null,
+      });
+    }
+
     const connectedCalls = calls.filter(
       (call) =>
         call.hs_call_disposition && dispositionClass.get(call.hs_call_disposition) === "connected",
@@ -376,6 +406,10 @@ async function syncCampaign(
     const hasCallLogged = calls.length > 0;
     const callCount = calls.length;
     const lastCallConnected = connectedCalls.length > 0;
+    const hadConversation = connectedCalls.some((call) => {
+      const label = call.hs_call_disposition ? dispositionLabelById.get(call.hs_call_disposition) : undefined;
+      return label ? isConversation(label) : false;
+    });
     const hasGenuineReply = inferGenuineReply(c.properties, startDate, endDate);
     const meetingBooked = meetings.length > 0;
 
@@ -425,6 +459,7 @@ async function syncCampaign(
       sqlReached,
       hasGenuineReply,
       meetingBooked,
+      hadConversation,
       lastSyncedAt: new Date(),
     });
 
@@ -487,6 +522,7 @@ async function syncCampaign(
             sqlReached: sql`excluded.sql_reached`,
             hasGenuineReply: sql`excluded.has_genuine_reply`,
             meetingBooked: sql`excluded.meeting_booked`,
+            hadConversation: sql`excluded.had_conversation`,
             lastSyncedAt: sql`excluded.last_synced_at`,
           },
         });
@@ -576,6 +612,37 @@ async function syncCampaign(
     }
   }
 
+  for (const batch of chunkArray(meetingEventRows, 200)) {
+    try {
+      await db
+        .insert(meetingEvents)
+        .values(batch)
+        .onConflictDoUpdate({
+          target: meetingEvents.hubspotMeetingId,
+          set: {
+            campaignId: sql`excluded.campaign_id`,
+            contactId: sql`excluded.contact_id`,
+            companyId: sql`excluded.company_id`,
+            ownerId: sql`excluded.owner_id`,
+            outcome: sql`excluded.outcome`,
+            meetingAt: sql`excluded.meeting_at`,
+          },
+        });
+    } catch (err) {
+      console.warn(`[sync] meeting_events batch upsert failed, retrying rows individually:`, err);
+      for (const row of batch) {
+        try {
+          await db
+            .insert(meetingEvents)
+            .values(row)
+            .onConflictDoUpdate({ target: meetingEvents.hubspotMeetingId, set: row });
+        } catch (rowErr) {
+          console.error(`[sync] meeting_event ${row.hubspotMeetingId} upsert failed, skipping:`, rowErr);
+        }
+      }
+    }
+  }
+
   // Reconcile to current list membership: sync only ever upserted contacts
   // that are on the list *right now* — anyone removed from the HubSpot list
   // since the last sync (disqualified, moved off, etc.) would otherwise stay
@@ -606,6 +673,18 @@ async function syncCampaign(
       .delete(callEvents)
       .where(
         and(eq(callEvents.campaignId, campaignId), notInArray(callEvents.hubspotCallId, [...seenCallIds])),
+      );
+  }
+
+  // Same reconciliation for meeting events.
+  if (seenMeetingIds.size > 0) {
+    await db
+      .delete(meetingEvents)
+      .where(
+        and(
+          eq(meetingEvents.campaignId, campaignId),
+          notInArray(meetingEvents.hubspotMeetingId, [...seenMeetingIds]),
+        ),
       );
   }
 }

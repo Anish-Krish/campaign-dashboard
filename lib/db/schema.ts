@@ -116,6 +116,13 @@ export const contacts = pgTable("contacts", {
   sqlReached: boolean("sql_reached").notNull().default(false),
   hasGenuineReply: boolean("has_genuine_reply").notNull().default(false),
   meetingBooked: boolean("meeting_booked").notNull().default(false),
+  // Did this contact have a real back-and-forth on a call, not just a
+  // pickup? Scoped to disposition labels "Connected - 01 - Pitch",
+  // "Connected - 02 - Past Pitch", "Connected - 03 - Meeting" specifically —
+  // a strict subset of lastCallConnected (excludes bare "Connected" and
+  // "Connected - 04 - Wrong Title"). Powers the "Conversation → Meeting
+  // Rate" metric — see isConversation in lib/sync.ts.
+  hadConversation: boolean("had_conversation").notNull().default(false),
   lastSyncedAt: timestamp("last_synced_at"),
 });
 
@@ -141,6 +148,23 @@ export const callEvents = pgTable("call_events", {
   calledAt: timestamp("called_at"),
 });
 
+// One row per individual HubSpot meeting (not aggregated) — same rationale
+// as callEvents: contacts.lastMeetingAt/meetingBooked is a single
+// latest-snapshot per contact scoped to one campaign's sync window, which
+// can't answer "what did this rep book in the last 30 days across every
+// campaign." Soft references, same as callEvents.
+export const meetingEvents = pgTable("meeting_events", {
+  hubspotMeetingId: text("hubspot_meeting_id").primaryKey(),
+  campaignId: integer("campaign_id")
+    .notNull()
+    .references(() => campaigns.id, { onDelete: "cascade" }),
+  contactId: text("contact_id"),
+  companyId: text("company_id"),
+  ownerId: text("owner_id"),
+  outcome: text("outcome"), // hs_meeting_outcome
+  meetingAt: timestamp("meeting_at"), // hs_timestamp
+});
+
 export const syncRuns = pgTable("sync_runs", {
   id: serial("id").primaryKey(),
   startedAt: timestamp("started_at").notNull().defaultNow(),
@@ -154,4 +178,67 @@ export const syncRuns = pgTable("sync_runs", {
 export const appSettings = pgTable("app_settings", {
   key: text("key").primaryKey(),
   value: jsonb("value").notNull(),
+});
+
+// One row per enrichment pipeline run (LeadMagic/Prospeo/ZeroBounce waterfall),
+// mirrors syncRuns' job-bookkeeping shape. campaignId is nullable — a run can
+// target an ad hoc contact list not yet tied to a campaign.
+export const enrichmentRuns = pgTable("enrichment_runs", {
+  id: serial("id").primaryKey(),
+  campaignId: integer("campaign_id").references(() => campaigns.id, { onDelete: "cascade" }),
+  label: text("label"),
+  status: text("status").notNull().default("queued"), // queued | running | success | error | partial
+  currentStage: text("current_stage"),
+  totalRows: integer("total_rows").notNull().default(0),
+  processedRows: integer("processed_rows").notNull().default(0),
+  triggerSource: text("trigger_source").notNull(), // manual_ui | chat
+  startedAt: timestamp("started_at").notNull().defaultNow(),
+  finishedAt: timestamp("finished_at"),
+  errorMessage: text("error_message"),
+});
+
+// The stable per-contact row identity the CLI pipeline (Enrichment/) lacks —
+// each pipeline stage upserts onto this row as it processes it, instead of
+// writing one all-or-nothing CSV at the very end, so a crashed run leaves
+// real, queryable partial state. contactId is a soft reference, same
+// rationale as contacts.companyId/ownerId above: a row may not yet correspond
+// to a synced HubSpot contact (e.g. a freshly uploaded prospect list), and a
+// hard FK would abort the insert on any row that doesn't resolve.
+export const enrichmentRows = pgTable("enrichment_rows", {
+  id: serial("id").primaryKey(),
+  runId: integer("run_id")
+    .notNull()
+    .references(() => enrichmentRuns.id, { onDelete: "cascade" }),
+  contactId: text("contact_id"),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+  companyName: text("company_name"),
+  domain: text("domain"),
+  emailStatus: text("email_status").notNull().default("pending"), // pending | found | no_match | rejected | error | skipped
+  email: text("email"),
+  emailSource: text("email_source"), // existing | leadmagic | prospeo
+  emailZeroBounceStatus: text("email_zerobounce_status"),
+  mobileStatus: text("mobile_status").notNull().default("pending"), // pending | found | no_match | rejected | error | skipped
+  mobile: text("mobile"),
+  mobileSource: text("mobile_source"), // leadmagic | prospeo
+  creditsConsumed: integer("credits_consumed").notNull().default(0),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+// Append-only per-attempt audit log — one row per provider call against an
+// enrichment row. Powers the chat panel's "explain why this contact's
+// enrichment failed" tool and per-run credit accounting; enrichmentRows only
+// holds current state, this holds the history that got it there.
+export const enrichmentFieldEvents = pgTable("enrichment_field_events", {
+  id: serial("id").primaryKey(),
+  enrichmentRowId: integer("enrichment_row_id")
+    .notNull()
+    .references(() => enrichmentRows.id, { onDelete: "cascade" }),
+  field: text("field").notNull(), // email | mobile
+  provider: text("provider").notNull(), // leadmagic | prospeo | zerobounce | zoominfo
+  outcome: text("outcome").notNull(), // found | no_match | rejected | error | skipped
+  value: text("value"),
+  creditsConsumed: integer("credits_consumed").notNull().default(0),
+  errorMessage: text("error_message"),
+  occurredAt: timestamp("occurred_at").notNull().defaultNow(),
 });
