@@ -154,6 +154,15 @@ const COLUMN_ALIASES = {
   lastName: ["last name", "lastname", "last"],
   companyName: ["company", "company name", "organization", "company name (from crm)"],
   domain: ["domain", "website", "company domain", "company website", "company domain name"],
+  // A HubSpot CRM export already has whatever email/phone data is on file —
+  // captured the same way as a campaign-sourced row's "current" snapshot
+  // (see triggerEnrichmentRun) so a re-uploaded export never re-spends
+  // credits re-finding data that's sitting right there in the file.
+  email: ["email", "email address"],
+  phone: ["phone", "phone number"],
+  workPhone: ["work phone", "work phone number"],
+  mobilePhone: ["mobile phone", "mobile phone number", "cell phone", "cell", "cell phone number"],
+  directPhone: ["direct phone", "direct phone number"],
 };
 
 // Reads an uploaded CSV server-side and auto-detects which column maps to
@@ -178,6 +187,11 @@ export async function parseEnrichmentCsv(formData: FormData): Promise<{
     lastName: detect(COLUMN_ALIASES.lastName),
     companyName: detect(COLUMN_ALIASES.companyName),
     domain: detect(COLUMN_ALIASES.domain),
+    email: detect(COLUMN_ALIASES.email),
+    phone: detect(COLUMN_ALIASES.phone),
+    workPhone: detect(COLUMN_ALIASES.workPhone),
+    mobilePhone: detect(COLUMN_ALIASES.mobilePhone),
+    directPhone: detect(COLUMN_ALIASES.directPhone),
   };
 
   return { headers, rows, detectedMapping };
@@ -187,10 +201,24 @@ export async function parseEnrichmentCsv(formData: FormData): Promise<{
 // enrichmentRows.contactId are already nullable soft-references for exactly
 // this case. No HubSpot domain lookup here (there's no companyId to look
 // one up from) — whatever the CSV's own domain column mapped to (or nothing)
-// is used as-is.
+// is used as-is. Email/phone columns (if mapped) are captured as the row's
+// "current" snapshot and pre-mark emailStatus/mobileStatus "found"/"existing"
+// exactly like a campaign-sourced row does from a live HubSpot read — same
+// pendingRows() gate in the Inngest waterfall keeps these rows out of every
+// provider stage automatically.
 export async function triggerEnrichmentRunFromRows(
   rows: Record<string, string>[],
-  mapping: { firstName: string; lastName: string; companyName: string | null; domain: string | null },
+  mapping: {
+    firstName: string;
+    lastName: string;
+    companyName: string | null;
+    domain: string | null;
+    email: string | null;
+    phone: string | null;
+    workPhone: string | null;
+    mobilePhone: string | null;
+    directPhone: string | null;
+  },
   label: string,
 ) {
   if (rows.length === 0) return;
@@ -208,13 +236,33 @@ export async function triggerEnrichmentRunFromRows(
 
   await insertRows(
     run.id,
-    rows.map((r) => ({
-      contactId: null,
-      firstName: r[mapping.firstName] || null,
-      lastName: r[mapping.lastName] || null,
-      companyName: mapping.companyName ? r[mapping.companyName] || null : null,
-      domain: mapping.domain ? r[mapping.domain] || null : null,
-    })),
+    rows.map((r) => {
+      const currentEmail = mapping.email ? r[mapping.email] || null : null;
+      const currentPhone = mapping.phone ? r[mapping.phone] || null : null;
+      const currentWorkPhone = mapping.workPhone ? r[mapping.workPhone] || null : null;
+      const currentMobilePhone = mapping.mobilePhone ? r[mapping.mobilePhone] || null : null;
+      const currentDirectPhone = mapping.directPhone ? r[mapping.directPhone] || null : null;
+      const currentMobile = pickCurrentMobile({
+        mobilephone: currentMobilePhone ?? undefined,
+        direct_phone: currentDirectPhone ?? undefined,
+        work_phone: currentWorkPhone ?? undefined,
+        phone: currentPhone ?? undefined,
+      });
+      return {
+        contactId: null,
+        firstName: r[mapping.firstName] || null,
+        lastName: r[mapping.lastName] || null,
+        companyName: mapping.companyName ? r[mapping.companyName] || null : null,
+        domain: mapping.domain ? r[mapping.domain] || null : null,
+        currentEmail,
+        currentPhone,
+        currentWorkPhone,
+        currentMobilePhone,
+        currentDirectPhone,
+        ...(currentEmail ? { emailStatus: "found" as const, email: currentEmail, emailSource: "existing" as const } : {}),
+        ...(currentMobile ? { mobileStatus: "found" as const, mobile: currentMobile, mobileSource: "existing" as const } : {}),
+      };
+    }),
   );
 
   revalidatePath("/enrichment");

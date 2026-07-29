@@ -11,17 +11,40 @@ const inputStyle = { borderColor: "var(--border-hairline)", color: "var(--text-p
 
 type CampaignOption = { id: number; name: string; authorityContacts: number; totalContacts: number };
 
+type MappingKey =
+  | "firstName"
+  | "lastName"
+  | "companyName"
+  | "domain"
+  | "email"
+  | "phone"
+  | "workPhone"
+  | "mobilePhone"
+  | "directPhone";
+
 type ParsedCsv = {
   headers: string[];
   rows: Record<string, string>[];
-  detectedMapping: Record<"firstName" | "lastName" | "companyName" | "domain", string | null>;
+  detectedMapping: Record<MappingKey, string | null>;
 };
 
-const MAPPING_FIELDS: { key: "firstName" | "lastName" | "companyName" | "domain"; label: string; required: boolean }[] = [
+const IDENTITY_FIELDS: { key: MappingKey; label: string; required: boolean }[] = [
   { key: "firstName", label: "First Name", required: true },
   { key: "lastName", label: "Last Name", required: true },
   { key: "companyName", label: "Company Name", required: false },
   { key: "domain", label: "Domain", required: false },
+];
+
+// Optional — if the CSV already has these (e.g. a HubSpot CRM export),
+// mapping them shows the data immediately as "Current" columns and skips
+// enrichment for any row that already has it, instead of re-spending
+// credits re-finding data that was already sitting in the file.
+const EXISTING_DATA_FIELDS: { key: MappingKey; label: string; required: boolean }[] = [
+  { key: "email", label: "Email", required: false },
+  { key: "phone", label: "Phone", required: false },
+  { key: "workPhone", label: "Work Phone", required: false },
+  { key: "mobilePhone", label: "Mobile Phone", required: false },
+  { key: "directPhone", label: "Direct Phone", required: false },
 ];
 
 function Tab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
@@ -44,11 +67,16 @@ function Tab({ active, onClick, children }: { active: boolean; onClick: () => vo
 export function StartEnrichmentPanel({ campaignOptions }: { campaignOptions: CampaignOption[] }) {
   const [mode, setMode] = useState<"campaign" | "csv">("campaign");
   const [parsed, setParsed] = useState<ParsedCsv | null>(null);
-  const [mapping, setMapping] = useState<Record<"firstName" | "lastName" | "companyName" | "domain", string>>({
+  const [mapping, setMapping] = useState<Record<MappingKey, string>>({
     firstName: "",
     lastName: "",
     companyName: "",
     domain: "",
+    email: "",
+    phone: "",
+    workPhone: "",
+    mobilePhone: "",
+    directPhone: "",
   });
   const [label, setLabel] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -72,6 +100,11 @@ export function StartEnrichmentPanel({ campaignOptions }: { campaignOptions: Cam
         lastName: result.detectedMapping.lastName ?? "",
         companyName: result.detectedMapping.companyName ?? "",
         domain: result.detectedMapping.domain ?? "",
+        email: result.detectedMapping.email ?? "",
+        phone: result.detectedMapping.phone ?? "",
+        workPhone: result.detectedMapping.workPhone ?? "",
+        mobilePhone: result.detectedMapping.mobilePhone ?? "",
+        directPhone: result.detectedMapping.directPhone ?? "",
       });
       setLabel(file.name.replace(/\.csv$/i, ""));
     } catch (err) {
@@ -94,6 +127,11 @@ export function StartEnrichmentPanel({ campaignOptions }: { campaignOptions: Cam
           lastName: mapping.lastName,
           companyName: mapping.companyName || null,
           domain: mapping.domain || null,
+          email: mapping.email || null,
+          phone: mapping.phone || null,
+          workPhone: mapping.workPhone || null,
+          mobilePhone: mapping.mobilePhone || null,
+          directPhone: mapping.directPhone || null,
         },
         label,
       );
@@ -160,7 +198,7 @@ export function StartEnrichmentPanel({ campaignOptions }: { campaignOptions: Cam
                 {parsed.rows.length} row(s) detected. Map columns (First/Last Name required):
               </p>
               <div className="flex flex-wrap gap-3">
-                {MAPPING_FIELDS.map((field) => (
+                {IDENTITY_FIELDS.map((field) => (
                   <div key={field.key}>
                     <label className="mb-1 block text-xs" style={{ color: "var(--text-secondary)" }}>
                       {field.label}
@@ -193,6 +231,33 @@ export function StartEnrichmentPanel({ campaignOptions }: { campaignOptions: Cam
                     style={inputStyle}
                   />
                 </div>
+              </div>
+
+              <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                Existing data (optional) — mapping these shows what the file already has and skips enrichment for
+                rows that already have it:
+              </p>
+              <div className="flex flex-wrap gap-3">
+                {EXISTING_DATA_FIELDS.map((field) => (
+                  <div key={field.key}>
+                    <label className="mb-1 block text-xs" style={{ color: "var(--text-secondary)" }}>
+                      {field.label}
+                    </label>
+                    <select
+                      value={mapping[field.key]}
+                      onChange={(e) => setMapping((m) => ({ ...m, [field.key]: e.target.value }))}
+                      className="rounded border bg-transparent px-2 py-1.5 text-sm"
+                      style={inputStyle}
+                    >
+                      <option value="">—</option>
+                      {parsed.headers.map((h) => (
+                        <option key={h} value={h}>
+                          {h}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
               </div>
               <div className="flex items-center gap-3">
                 <button

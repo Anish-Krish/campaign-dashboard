@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import {
   type ColumnDef,
   type RowSelectionState,
@@ -55,6 +55,18 @@ type EnrichmentTableMeta = {
 
 const inputStyle = { borderColor: "var(--border-hairline)", color: "var(--text-primary)" };
 
+// Header background tint by section, applied to both the top-level group
+// cell (source/current/enrichment) and its sub-headers (emailGroup/
+// mobileGroup, and each leaf column) so the whole section reads as one
+// visual block instead of 15+ columns blurring together.
+function headerTint(id: string): string | null {
+  if (id === "current" || CURRENT_COLUMN_IDS.includes(id)) return "var(--series-yellow)";
+  if (id === "enrichment" || id === "emailGroup" || id === "mobileGroup" || ENRICHMENT_COLUMN_IDS.includes(id)) {
+    return "var(--series-blue)";
+  }
+  return null;
+}
+
 const STATUS_COLORS: Record<string, string> = {
   draft: "var(--text-muted)",
   pending: "var(--text-muted)",
@@ -68,22 +80,64 @@ const STATUS_COLORS: Record<string, string> = {
   skipped_duplicate: "var(--text-muted)",
 };
 
-function StatusBadge({ status }: { status: string }) {
+// Shared cell renderer: empty values fade to text-muted so populated data
+// visually pops against a sheet full of "—" placeholders; phone/email
+// columns render in a monospace tabular face to line up like a real data
+// grid instead of proportional body text.
+function DataCell({ value, mono }: { value: string | null | undefined; mono?: boolean }) {
+  if (!value) {
+    return (
+      <span style={{ color: "var(--text-muted)" }} aria-hidden>
+        —
+      </span>
+    );
+  }
   return (
-    <span className="inline-flex items-center gap-1.5">
-      <span
-        className="inline-block h-2 w-2 rounded-full"
-        style={{ background: STATUS_COLORS[status] ?? "var(--text-muted)" }}
-        aria-hidden
-      />
+    <span className={mono ? "font-mono tabular-nums" : undefined} style={{ color: "var(--text-primary)" }}>
+      {value}
+    </span>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const color = STATUS_COLORS[status] ?? "var(--text-muted)";
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap"
+      style={{ background: `color-mix(in srgb, ${color} 16%, transparent)`, color }}
+    >
+      <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: color }} aria-hidden />
       {status.replace("_", " ")}
     </span>
   );
 }
 
+// Play-button control embedded directly in the Email/Mobile column headers
+// (Clay-style "run this column") — a filled circle so it reads as a clickable
+// control against the header row rather than blending into the label text.
+// Pill that reflects whether its column group is currently shown — filled
+// and tinted with the section's color when visible, a plain outline when
+// hidden, so the toggle row doubles as a legend for the header tints below.
+function GroupToggleButton({ label, color, visible, onClick }: { label: string; color: string; visible: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="cursor-pointer rounded-full border px-3 py-1 text-xs font-medium transition"
+      style={
+        visible
+          ? { background: `color-mix(in srgb, ${color} 18%, transparent)`, borderColor: color, color }
+          : { borderColor: "var(--border-hairline)", color: "var(--text-muted)", background: "transparent" }
+      }
+    >
+      {label}
+    </button>
+  );
+}
+
 function ColumnGroupHeader({ label, title, onRun, disabled }: { label: string; title: string; onRun: () => void; disabled: boolean }) {
   return (
-    <div className="flex items-center justify-center gap-1.5">
+    <div className="flex items-center justify-center gap-2">
       <span>{label}</span>
       <button
         type="button"
@@ -93,8 +147,14 @@ function ColumnGroupHeader({ label, title, onRun, disabled }: { label: string; t
           e.stopPropagation();
           onRun();
         }}
-        className="cursor-pointer disabled:cursor-not-allowed disabled:opacity-30"
-        style={{ color: "var(--series-blue)" }}
+        className="flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-full text-[10px] normal-case transition disabled:cursor-not-allowed disabled:opacity-30"
+        style={{ background: "rgba(14, 165, 183, 0.16)", color: "var(--series-blue)" }}
+        onMouseEnter={(e) => {
+          if (!disabled) e.currentTarget.style.background = "rgba(14, 165, 183, 0.32)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = "rgba(14, 165, 183, 0.16)";
+        }}
       >
         ▶
       </button>
@@ -182,6 +242,17 @@ export function EnrichmentExplorer({
   const columns = useMemo<ColumnDef<EnrichmentRowItem>[]>(
     () => [
       {
+        id: "rowIndex",
+        header: "#",
+        cell: ({ row }) => (
+          <span className="font-mono tabular-nums" style={{ color: "var(--text-muted)" }}>
+            {row.index + 1}
+          </span>
+        ),
+        enableSorting: false,
+        size: 40,
+      },
+      {
         id: "select",
         header: ({ table }) => (
           <input
@@ -209,13 +280,13 @@ export function EnrichmentExplorer({
             id: "companyName",
             header: "Company",
             accessorKey: "companyName",
-            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+            cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} />,
           },
           {
             id: "domain",
             header: "Domain",
             accessorKey: "domain",
-            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+            cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} mono />,
           },
         ],
       },
@@ -227,31 +298,31 @@ export function EnrichmentExplorer({
             id: "currentEmail",
             header: "Current Email",
             accessorKey: "currentEmail",
-            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+            cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} mono />,
           },
           {
             id: "currentPhone",
             header: "Current Phone",
             accessorKey: "currentPhone",
-            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+            cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} mono />,
           },
           {
             id: "currentWorkPhone",
             header: "Current Work Phone",
             accessorKey: "currentWorkPhone",
-            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+            cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} mono />,
           },
           {
             id: "currentMobilePhone",
             header: "Current Mobile Phone",
             accessorKey: "currentMobilePhone",
-            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+            cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} mono />,
           },
           {
             id: "currentDirectPhone",
             header: "Current Direct Phone",
             accessorKey: "currentDirectPhone",
-            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+            cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} mono />,
           },
         ],
       },
@@ -277,7 +348,7 @@ export function EnrichmentExplorer({
                 id: "email",
                 header: "Email",
                 accessorKey: "email",
-                cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+                cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} mono />,
               },
               {
                 id: "emailStatus",
@@ -289,7 +360,7 @@ export function EnrichmentExplorer({
                 id: "emailSource",
                 header: "Email Source",
                 accessorKey: "emailSource",
-                cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+                cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} />,
               },
             ],
           },
@@ -311,7 +382,7 @@ export function EnrichmentExplorer({
                 id: "mobile",
                 header: "Mobile",
                 accessorKey: "mobile",
-                cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+                cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} mono />,
               },
               {
                 id: "mobileStatus",
@@ -323,7 +394,7 @@ export function EnrichmentExplorer({
                 id: "mobileSource",
                 header: "Mobile Source",
                 accessorKey: "mobileSource",
-                cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+                cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} />,
               },
               {
                 id: "directPhonePushStatus",
@@ -493,30 +564,24 @@ export function EnrichmentExplorer({
             className="w-72 rounded border bg-transparent px-3 py-1.5 text-sm outline-none focus:border-blue-500"
             style={inputStyle}
           />
-          <button
-            type="button"
+          <GroupToggleButton
+            label="Source"
+            color="var(--text-secondary)"
+            visible={SOURCE_COLUMN_IDS.some((id) => table.getColumn(id)?.getIsVisible() ?? true)}
             onClick={() => toggleGroup(SOURCE_COLUMN_IDS)}
-            className="cursor-pointer rounded-full border px-3 py-1 text-xs transition"
-            style={{ borderColor: "var(--border-hairline)", color: "var(--text-secondary)" }}
-          >
-            Toggle Source columns
-          </button>
-          <button
-            type="button"
+          />
+          <GroupToggleButton
+            label="Current (HubSpot)"
+            color="var(--series-yellow)"
+            visible={CURRENT_COLUMN_IDS.some((id) => table.getColumn(id)?.getIsVisible() ?? true)}
             onClick={() => toggleGroup(CURRENT_COLUMN_IDS)}
-            className="cursor-pointer rounded-full border px-3 py-1 text-xs transition"
-            style={{ borderColor: "var(--border-hairline)", color: "var(--text-secondary)" }}
-          >
-            Toggle Current columns
-          </button>
-          <button
-            type="button"
+          />
+          <GroupToggleButton
+            label="Enrichment"
+            color="var(--series-blue)"
+            visible={ENRICHMENT_COLUMN_IDS.some((id) => table.getColumn(id)?.getIsVisible() ?? true)}
             onClick={() => toggleGroup(ENRICHMENT_COLUMN_IDS)}
-            className="cursor-pointer rounded-full border px-3 py-1 text-xs transition"
-            style={{ borderColor: "var(--border-hairline)", color: "var(--text-secondary)" }}
-          >
-            Toggle Enrichment columns
-          </button>
+          />
           <p className="text-xs" style={{ color: "var(--text-muted)" }}>
             {rows.length} contacts — {foundEmail} emails found, {foundMobile} mobiles found, {totalCredits} credits
             used
@@ -525,31 +590,46 @@ export function EnrichmentExplorer({
       </div>
 
       <div className="hud-panel">
-        <div className="overflow-x-auto rounded-lg">
-          <table className="w-full text-left text-sm">
+        <div className="max-h-[70vh] overflow-auto rounded-lg">
+          <table className="w-full border-separate border-spacing-0 text-left text-sm">
             <thead>
-              {table.getHeaderGroups().map((headerGroup) => (
-                <tr
-                  key={headerGroup.id}
-                  className="hud-heading border-b text-xs"
-                  style={{ borderColor: "var(--border-hairline)" }}
-                >
+              {table.getHeaderGroups().map((headerGroup, groupIndex) => (
+                <tr key={headerGroup.id} className="hud-heading text-xs">
                   {headerGroup.headers.map((header) => {
-                    if (header.isPlaceholder) return <th key={header.id} colSpan={header.colSpan} rowSpan={header.rowSpan} />;
+                    const tint = headerTint(header.id);
+                    const cellStyle: CSSProperties = {
+                      borderBottom: "1px solid var(--border-hairline)",
+                      background: tint
+                        ? `color-mix(in srgb, ${tint} ${groupIndex === 0 ? 14 : 9}%, var(--chart-surface))`
+                        : "var(--chart-surface)",
+                      position: "sticky",
+                      top: groupIndex * 37,
+                      zIndex: 10 - groupIndex,
+                    };
+                    if (header.isPlaceholder) {
+                      return <th key={header.id} colSpan={header.colSpan} rowSpan={header.rowSpan} style={cellStyle} />;
+                    }
                     if (!header.column.getCanSort()) {
                       return (
                         <th
                           key={header.id}
                           colSpan={header.colSpan}
                           rowSpan={header.rowSpan}
-                          className="px-4 py-3 text-center font-medium"
+                          className="whitespace-nowrap px-4 py-3 text-center font-medium"
+                          style={cellStyle}
                         >
                           {flexRender(header.column.columnDef.header, header.getContext())}
                         </th>
                       );
                     }
                     return (
-                      <th key={header.id} colSpan={header.colSpan} rowSpan={header.rowSpan} className="px-4 py-3 font-medium">
+                      <th
+                        key={header.id}
+                        colSpan={header.colSpan}
+                        rowSpan={header.rowSpan}
+                        className="whitespace-nowrap px-4 py-3 font-medium"
+                        style={cellStyle}
+                      >
                         <button
                           type="button"
                           onClick={header.column.getToggleSortingHandler()}
@@ -581,14 +661,21 @@ export function EnrichmentExplorer({
                   </td>
                 </tr>
               )}
-              {table.getRowModel().rows.map((row) => (
+              {table.getRowModel().rows.map((row, rowIndex) => (
                 <tr
                   key={row.id}
-                  className="border-t"
-                  style={{ borderColor: "var(--gridline)", background: row.getIsSelected() ? "rgba(255,255,255,0.05)" : undefined }}
+                  className="border-t transition-colors hover:brightness-125"
+                  style={{
+                    borderColor: "var(--gridline)",
+                    background: row.getIsSelected()
+                      ? "rgba(14, 165, 183, 0.14)"
+                      : rowIndex % 2 === 1
+                        ? "rgba(255, 255, 255, 0.015)"
+                        : undefined,
+                  }}
                 >
                   {row.getVisibleCells().map((cell) => (
-                    <td key={cell.id} className="px-4 py-3" style={{ color: "var(--text-secondary)" }}>
+                    <td key={cell.id} className="px-4 py-3 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </td>
                   ))}
