@@ -2,12 +2,13 @@
 
 import { useState, useTransition } from "react";
 import { fetchDrillDown } from "@/app/(dashboard)/drilldown-actions";
-import { DailyCallsChart } from "@/components/DailyCallsChart";
+import { ActivityByDayChart } from "@/components/ActivityByDayChart";
 import type { DrillDownMetric } from "@/lib/queries";
 
 type DrillDownResult = Awaited<ReturnType<typeof fetchDrillDown>>;
 type ContactRow = DrillDownResult["rows"][number];
-type DailyStats = DrillDownResult["dailyStats"];
+type DailyCallStats = DrillDownResult["dailyCallStats"];
+type DailyMeetingStats = DrillDownResult["dailyMeetingStats"];
 
 const METRIC_TITLES: Record<DrillDownMetric, string> = {
   enrolled: "Contacts Enrolled",
@@ -39,10 +40,11 @@ export function DrillDownStatTile({
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<ContactRow[] | null>(null);
   const [outcomeCounts, setOutcomeCounts] = useState<Record<string, number>>({});
-  const [dailyStats, setDailyStats] = useState<DailyStats>(null);
+  const [dailyCallStats, setDailyCallStats] = useState<DailyCallStats>(null);
+  const [dailyMeetingStats, setDailyMeetingStats] = useState<DailyMeetingStats>(null);
   const [isPending, startTransition] = useTransition();
 
-  const showDailyChart = metric === "calls" || metric === "connects";
+  const showDailyChart = metric === "calls" || metric === "connects" || metric === "meetings";
 
   function handleOpen() {
     setOpen(true);
@@ -50,7 +52,8 @@ export function DrillDownStatTile({
       const data = await fetchDrillDown(metric, campaignId);
       setRows(data.rows);
       setOutcomeCounts(data.outcomeCounts);
-      setDailyStats(data.dailyStats);
+      setDailyCallStats(data.dailyCallStats);
+      setDailyMeetingStats(data.dailyMeetingStats);
     });
   }
 
@@ -119,8 +122,8 @@ export function DrillDownStatTile({
               </p>
             )}
 
-            {showDailyChart && dailyStats && (
-              <DailyCallsChart data={dailyStats} mode={metric === "connects" ? "connects" : "calls"} />
+            {showDailyChart && dailyCallStats && dailyMeetingStats && (
+              <ActivityByDayChart callStats={dailyCallStats} meetingStats={dailyMeetingStats} />
             )}
 
             {Object.keys(outcomeCounts).length > 1 && (

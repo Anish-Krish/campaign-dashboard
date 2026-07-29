@@ -548,6 +548,28 @@ export async function getDailyCallStats(campaignId?: number) {
   }));
 }
 
+// Meetings-booked half of the combined activity-by-day chart — same
+// Toronto-day bucketing as getDailyCallStats, reading meeting_events instead.
+export async function getDailyMeetingStats(campaignId?: number) {
+  const dayExpr = sql`date_trunc('day', ${meetingEvents.meetingAt} AT TIME ZONE 'UTC' AT TIME ZONE 'America/Toronto')`;
+
+  const rows = await db
+    .select({
+      date: sql<string>`to_char(${dayExpr}, 'YYYY-MM-DD')`,
+      meetingsBooked: sql<number>`count(*)::int`,
+    })
+    .from(meetingEvents)
+    .where(
+      campaignId
+        ? and(eq(meetingEvents.campaignId, campaignId), isNotNull(meetingEvents.meetingAt))
+        : isNotNull(meetingEvents.meetingAt),
+    )
+    .groupBy(dayExpr)
+    .orderBy(dayExpr);
+
+  return rows.map((r) => ({ date: r.date, meetingsBooked: Number(r.meetingsBooked) }));
+}
+
 // Meeting-outcome / pipeline-progression view (a separate lens from the
 // company-engagement view): did booked meetings actually happen, and did any
 // progress to a qualified opportunity. SQO/SQL stage IDs are portal-specific,
@@ -696,7 +718,7 @@ export async function getRepRangeStats(ownerId: string, range: { startDate: stri
 }
 
 // Same shape as getDailyCallStats, filtered by owner + date range instead of
-// campaign — lets the rep page reuse DailyCallsChart unchanged.
+// campaign.
 export async function getRepDailyCallStats(ownerId: string, range: { startDate: string; endDate: string }) {
   const dayExpr = sql`date_trunc('day', ${callEvents.calledAt} AT TIME ZONE 'UTC' AT TIME ZONE 'America/Toronto')`;
 
@@ -724,4 +746,28 @@ export async function getRepDailyCallStats(ownerId: string, range: { startDate: 
     connects: Number(r.connects),
     wrongTitle: Number(r.wrongTitle),
   }));
+}
+
+// Same shape as getDailyMeetingStats, filtered by owner + date range instead
+// of campaign.
+export async function getRepDailyMeetingStats(ownerId: string, range: { startDate: string; endDate: string }) {
+  const dayExpr = sql`date_trunc('day', ${meetingEvents.meetingAt} AT TIME ZONE 'UTC' AT TIME ZONE 'America/Toronto')`;
+
+  const rows = await db
+    .select({
+      date: sql<string>`to_char(${dayExpr}, 'YYYY-MM-DD')`,
+      meetingsBooked: sql<number>`count(*)::int`,
+    })
+    .from(meetingEvents)
+    .where(
+      and(
+        eq(meetingEvents.ownerId, ownerId),
+        isNotNull(meetingEvents.meetingAt),
+        sql`to_char(${dayExpr}, 'YYYY-MM-DD') between ${range.startDate} and ${range.endDate}`,
+      ),
+    )
+    .groupBy(dayExpr)
+    .orderBy(dayExpr);
+
+  return rows.map((r) => ({ date: r.date, meetingsBooked: Number(r.meetingsBooked) }));
 }

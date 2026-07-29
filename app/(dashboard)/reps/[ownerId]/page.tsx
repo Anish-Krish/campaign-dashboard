@@ -2,9 +2,9 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { StatTile, StatTileRow } from "@/components/StatTile";
 import { DateRangeFilter } from "@/components/DateRangeFilter";
-import { DailyCallsChart } from "@/components/DailyCallsChart";
+import { ActivityByDayChart } from "@/components/ActivityByDayChart";
 import { resolveDateRange } from "@/lib/date-range";
-import { getActiveReps, getRepDailyCallStats, getRepRangeStats } from "@/lib/queries";
+import { getActiveReps, getRepDailyCallStats, getRepDailyMeetingStats, getRepRangeStats } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -23,10 +23,11 @@ export default async function RepDetailPage({
   const sp = await searchParams;
   const range = resolveDateRange({ range: str(sp.range), from: str(sp.from), to: str(sp.to) });
 
-  const [reps, stats, dailyStats] = await Promise.all([
+  const [reps, stats, dailyCallStats, dailyMeetingStats] = await Promise.all([
     getActiveReps(),
     getRepRangeStats(ownerId, range),
     getRepDailyCallStats(ownerId, range),
+    getRepDailyMeetingStats(ownerId, range),
   ]);
 
   const rep = reps.find((r) => r.ownerId === ownerId);
@@ -65,9 +66,9 @@ export default async function RepDetailPage({
 
       <div className="hud-panel">
         <h3 className="hud-heading px-5 pt-4 text-xs" style={{ color: "var(--text-secondary)" }}>
-          Calls by day
+          Activity by day
         </h3>
-        <DailyCallsChart data={dailyStats} mode="calls" />
+        <ActivityByDayChart callStats={dailyCallStats} meetingStats={dailyMeetingStats} />
       </div>
     </div>
   );

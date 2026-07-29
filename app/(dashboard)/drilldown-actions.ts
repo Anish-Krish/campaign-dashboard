@@ -1,11 +1,15 @@
 "use server";
 
-import { getContactsForMetric, getDailyCallStats, type DrillDownMetric } from "@/lib/queries";
+import { getContactsForMetric, getDailyCallStats, getDailyMeetingStats, type DrillDownMetric } from "@/lib/queries";
+
+const CHART_METRICS: DrillDownMetric[] = ["calls", "connects", "meetings"];
 
 export async function fetchDrillDown(metric: DrillDownMetric, campaignId?: number) {
-  const [data, dailyStats] = await Promise.all([
+  const showChart = CHART_METRICS.includes(metric);
+  const [data, dailyCallStats, dailyMeetingStats] = await Promise.all([
     getContactsForMetric(metric, campaignId),
-    metric === "calls" || metric === "connects" ? getDailyCallStats(campaignId) : Promise.resolve(null),
+    showChart ? getDailyCallStats(campaignId) : Promise.resolve(null),
+    showChart ? getDailyMeetingStats(campaignId) : Promise.resolve(null),
   ]);
-  return { ...data, dailyStats };
+  return { ...data, dailyCallStats, dailyMeetingStats };
 }
