@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { parse } from "csv-parse/sync";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { campaigns, companies, contacts, enrichmentRows, enrichmentRuns } from "@/lib/db/schema";
@@ -16,13 +17,29 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
-// The one entry point for kicking off a run — mirrors how lib/sync.ts's
-// runSyncJob() is the single place that inserts a job-bookkeeping row before
-// doing the real work. Builds enrichment_rows from contacts/companies
+type NewEnrichmentRow = {
+  contactId: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  companyName: string | null;
+  domain: string | null;
+};
+
+// Shared tail for both entry points below (campaign-sourced and
+// CSV-sourced): insert the rows, fire the event. Mirrors how
+// lib/sync.ts's runSyncJob() is the single place that does the real work
+// regardless of what triggered it.
+async function insertRowsAndFireEvent(runId: number, rows: NewEnrichmentRow[]) {
+  for (const batch of chunk(rows, 200)) {
+    await db.insert(enrichmentRows).values(batch.map((r) => ({ runId, ...r })));
+  }
+  await inngest.send({ name: "enrichment/run.requested", data: { runId } });
+}
+
+// Builds enrichment_rows from an existing campaign's contacts/companies
 // (contacts/companies don't cache HubSpot's "domain" company property, so
 // it's fetched live here — LeadMagic/Prospeo match far better against a
-// domain than a bare company name), then fires the Inngest event that
-// lib/inngest/functions/enrichmentWaterfall.ts picks up.
+// domain than a bare company name).
 export async function triggerEnrichmentRun(formData: FormData) {
   const campaignId = Number(formData.get("campaignId"));
   const authorityOnly = formData.get("authorityOnly") === "on";
@@ -72,20 +89,88 @@ export async function triggerEnrichmentRun(formData: FormData) {
     })
     .returning();
 
-  for (const batch of chunk(contactRows, 200)) {
-    await db.insert(enrichmentRows).values(
-      batch.map((c) => ({
-        runId: run.id,
-        contactId: c.hubspotContactId,
-        firstName: c.firstName,
-        lastName: c.lastName,
-        companyName: c.companyName,
-        domain: c.companyId ? (domainByCompanyId.get(c.companyId) ?? null) : null,
-      })),
-    );
-  }
+  await insertRowsAndFireEvent(
+    run.id,
+    contactRows.map((c) => ({
+      contactId: c.hubspotContactId,
+      firstName: c.firstName,
+      lastName: c.lastName,
+      companyName: c.companyName,
+      domain: c.companyId ? (domainByCompanyId.get(c.companyId) ?? null) : null,
+    })),
+  );
 
-  await inngest.send({ name: "enrichment/run.requested", data: { runId: run.id } });
+  revalidatePath("/enrichment");
+  redirect(`/enrichment?run=${run.id}`);
+}
+
+const COLUMN_ALIASES = {
+  firstName: ["first name", "firstname", "first"],
+  lastName: ["last name", "lastname", "last"],
+  companyName: ["company", "company name", "organization", "company name (from crm)"],
+  domain: ["domain", "website", "company domain", "company website", "company domain name"],
+};
+
+// Reads an uploaded CSV server-side and auto-detects which column maps to
+// which field by common header aliases — nothing is written to the DB yet.
+// The client shows the detected mapping (editable) and a row-count preview
+// before calling triggerEnrichmentRunFromRows to actually create the run.
+export async function parseEnrichmentCsv(formData: FormData): Promise<{
+  headers: string[];
+  rows: Record<string, string>[];
+  detectedMapping: Record<keyof typeof COLUMN_ALIASES, string | null>;
+}> {
+  const file = formData.get("file");
+  if (!(file instanceof File)) throw new Error("No file uploaded");
+
+  const text = await file.text();
+  const rows = parse(text, { columns: true, skip_empty_lines: true, trim: true }) as Record<string, string>[];
+  const headers = rows.length > 0 ? Object.keys(rows[0]) : [];
+
+  const detect = (aliases: string[]) => headers.find((h) => aliases.includes(h.toLowerCase().trim())) ?? null;
+  const detectedMapping = {
+    firstName: detect(COLUMN_ALIASES.firstName),
+    lastName: detect(COLUMN_ALIASES.lastName),
+    companyName: detect(COLUMN_ALIASES.companyName),
+    domain: detect(COLUMN_ALIASES.domain),
+  };
+
+  return { headers, rows, detectedMapping };
+}
+
+// Ad hoc list, not tied to any campaign — enrichmentRuns.campaignId and
+// enrichmentRows.contactId are already nullable soft-references for exactly
+// this case. No HubSpot domain lookup here (there's no companyId to look
+// one up from) — whatever the CSV's own domain column mapped to (or nothing)
+// is used as-is.
+export async function triggerEnrichmentRunFromRows(
+  rows: Record<string, string>[],
+  mapping: { firstName: string; lastName: string; companyName: string | null; domain: string | null },
+  label: string,
+) {
+  if (rows.length === 0) return;
+
+  const [run] = await db
+    .insert(enrichmentRuns)
+    .values({
+      campaignId: null,
+      label: label || "Uploaded list",
+      status: "queued",
+      triggerSource: "manual_ui",
+      totalRows: rows.length,
+    })
+    .returning();
+
+  await insertRowsAndFireEvent(
+    run.id,
+    rows.map((r) => ({
+      contactId: null,
+      firstName: r[mapping.firstName] || null,
+      lastName: r[mapping.lastName] || null,
+      companyName: mapping.companyName ? r[mapping.companyName] || null : null,
+      domain: mapping.domain ? r[mapping.domain] || null : null,
+    })),
+  );
 
   revalidatePath("/enrichment");
   redirect(`/enrichment?run=${run.id}`);

@@ -1,10 +1,8 @@
 import { EnrichmentExplorer } from "@/components/EnrichmentExplorer";
-import { triggerEnrichmentRun } from "./actions";
+import { StartEnrichmentPanel } from "@/components/StartEnrichmentPanel";
 import { getCampaignsForEnrichment, getEnrichmentRun, getEnrichmentRows, getEnrichmentRuns } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
-
-const inputStyle = { borderColor: "var(--border-hairline)", color: "var(--text-primary)" };
 
 export default async function EnrichmentPage({
   searchParams,
@@ -30,38 +28,7 @@ export default async function EnrichmentPage({
         </p>
       </div>
 
-      <div className="hud-panel space-y-3 p-4">
-        <form action={triggerEnrichmentRun} className="flex flex-wrap items-end gap-3">
-          <div>
-            <label className="mb-1 block text-xs" style={{ color: "var(--text-secondary)" }}>
-              Campaign
-            </label>
-            <select
-              name="campaignId"
-              required
-              defaultValue=""
-              className="rounded border bg-transparent px-2 py-1.5 text-sm"
-              style={inputStyle}
-            >
-              <option value="" disabled>
-                Select a campaign…
-              </option>
-              {campaignOptions.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} — {c.authorityContacts} authority / {c.totalContacts} total
-                </option>
-              ))}
-            </select>
-          </div>
-          <label className="flex items-center gap-2 pb-1.5 text-sm" style={{ color: "var(--text-secondary)" }}>
-            <input type="checkbox" name="authorityOnly" defaultChecked />
-            Authority contacts only
-          </label>
-          <button type="submit" className="hud-button rounded px-3 py-1.5 text-xs">
-            Start Enrichment
-          </button>
-        </form>
-      </div>
+      <StartEnrichmentPanel campaignOptions={campaignOptions} />
 
       {recentRuns.length > 0 && (
         <div className="hud-panel p-4">
