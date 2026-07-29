@@ -2,7 +2,7 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 import { inngest } from "@/lib/inngest/client";
 import { db } from "@/lib/db";
 import { enrichmentFieldEvents, enrichmentRows, enrichmentRuns } from "@/lib/db/schema";
-import { batchReadObjects } from "@/lib/hubspot";
+import { getContactCurrentFields, pickCurrentMobile } from "@/lib/hubspot";
 import * as leadmagic from "@/lib/enrichment/leadmagic";
 import * as prospeo from "@/lib/enrichment/prospeo";
 import { validateEmailOrSkip, isAcceptableStatus } from "@/lib/enrichment/zerobounce";
@@ -46,29 +46,39 @@ async function pendingRows(
     .where(and(eq(enrichmentRows.runId, runId), eq(enrichmentRows[statusField], "pending"), rowIdScope(rowIds)));
 }
 
-// Stage 1 (email only): check whether the linked HubSpot contact's own CRM
-// record already has an email on file — the same "existing" fast-path the
-// CLI pipeline got for free by reading the HubSpot export directly. Skips
-// LeadMagic/Prospeo credits entirely for any row this resolves.
+// Re-checks the linked HubSpot contact's own CRM record for an existing
+// email/phone — the same "existing" fast-path already applied automatically
+// at row creation (see triggerEnrichmentRun in actions.ts), re-run here as a
+// manual safety net for rows that reach 'pending' some other way (e.g. a
+// retried row whose earlier no_match/error got reset) so a stale run never
+// re-spends LeadMagic/Prospeo credits on data HubSpot has picked up since.
 async function hubspotRematchStage(runId: number, rowIds?: number[]) {
-  const rows = (await pendingRows(runId, "emailStatus", rowIds)).filter((r) => r.contactId);
-  if (rows.length === 0) return;
+  const emailRows = (await pendingRows(runId, "emailStatus", rowIds)).filter((r) => r.contactId);
+  const mobileRows = (await pendingRows(runId, "mobileStatus", rowIds)).filter((r) => r.contactId);
+  const contactIds = Array.from(new Set([...emailRows, ...mobileRows].map((r) => r.contactId!)));
+  if (contactIds.length === 0) return;
 
-  const records = await batchReadObjects<{ email?: string }>(
-    "contacts",
-    rows.map((r) => r.contactId!),
-    ["email"],
-  );
-  const emailByContactId = new Map(records.map((r) => [r.id, r.properties.email]));
+  const currentByContactId = new Map((await getContactCurrentFields(contactIds)).map((r) => [r.id, r]));
 
-  for (const row of rows) {
-    const email = emailByContactId.get(row.contactId!);
+  for (const row of emailRows) {
+    const email = currentByContactId.get(row.contactId!)?.email;
     if (!email) continue;
     await db
       .update(enrichmentRows)
       .set({ emailStatus: "found", email, emailSource: "existing", updatedAt: new Date() })
       .where(eq(enrichmentRows.id, row.id));
     await logEvent(row.id, "email", "hubspot", "found", { value: email });
+  }
+
+  for (const row of mobileRows) {
+    const current = currentByContactId.get(row.contactId!);
+    const mobile = current ? pickCurrentMobile(current) : null;
+    if (!mobile) continue;
+    await db
+      .update(enrichmentRows)
+      .set({ mobileStatus: "found", mobile, mobileSource: "existing", updatedAt: new Date() })
+      .where(eq(enrichmentRows.id, row.id));
+    await logEvent(row.id, "mobile", "hubspot", "found", { value: mobile });
   }
 }
 

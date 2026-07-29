@@ -214,6 +214,18 @@ export const enrichmentRows = pgTable("enrichment_rows", {
   lastName: text("last_name"),
   companyName: text("company_name"),
   domain: text("domain"),
+  // Snapshot of the linked HubSpot contact's own fields, captured at row
+  // creation (see triggerEnrichmentRun in actions.ts) — shown as their own
+  // "Current" columns in the spreadsheet so the user can see what's already
+  // on file before running anything. Always null for CSV-uploaded rows
+  // (contactId is null — no HubSpot record to read). Not kept in sync after
+  // creation; pushDirectPhoneToHubspot always re-fetches live at push time
+  // rather than trusting this snapshot.
+  currentEmail: text("current_email"),
+  currentPhone: text("current_phone"),
+  currentWorkPhone: text("current_work_phone"),
+  currentMobilePhone: text("current_mobile_phone"),
+  currentDirectPhone: text("current_direct_phone"),
   emailStatus: text("email_status").notNull().default("pending"), // pending | found | no_match | rejected | error | skipped
   email: text("email"),
   emailSource: text("email_source"), // existing | leadmagic | prospeo

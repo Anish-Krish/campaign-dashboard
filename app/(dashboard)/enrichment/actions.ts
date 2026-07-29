@@ -6,7 +6,13 @@ import { parse } from "csv-parse/sync";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { campaigns, companies, contacts, enrichmentRows, enrichmentRuns } from "@/lib/db/schema";
-import { batchReadObjects, batchUpdateObjects, getContactPhoneFields } from "@/lib/hubspot";
+import {
+  batchReadObjects,
+  batchUpdateObjects,
+  getContactCurrentFields,
+  getContactPhoneFields,
+  pickCurrentMobile,
+} from "@/lib/hubspot";
 import { inngest } from "@/lib/inngest/client";
 import { getEnrichmentRun, getEnrichmentRows } from "@/lib/queries";
 import { EMAIL_STAGES, MOBILE_STAGES, type Stage } from "@/lib/enrichment/stages";
@@ -23,6 +29,23 @@ type NewEnrichmentRow = {
   lastName: string | null;
   companyName: string | null;
   domain: string | null;
+  // Snapshot of the contact's current HubSpot fields (campaign-sourced rows
+  // only — CSV rows have no contactId to read). When present, emailStatus/
+  // mobileStatus are pre-set to "found"/"existing" so these rows are never
+  // picked up by pendingRows() — no LeadMagic/Prospeo/ZeroBounce call is
+  // ever made for data we already have, no matter which stage button gets
+  // clicked, without needing every stage to carry its own existing-data check.
+  currentEmail?: string | null;
+  currentPhone?: string | null;
+  currentWorkPhone?: string | null;
+  currentMobilePhone?: string | null;
+  currentDirectPhone?: string | null;
+  emailStatus?: "found";
+  email?: string | null;
+  emailSource?: "existing";
+  mobileStatus?: "found";
+  mobile?: string | null;
+  mobileSource?: "existing";
 };
 
 // Shared tail for both entry points below (campaign-sourced and
@@ -79,6 +102,14 @@ export async function triggerEnrichmentRun(formData: FormData) {
     }
   }
 
+  // Snapshot each contact's current email/phone fields so the spreadsheet
+  // can show what's already on file — and so rows that already have data
+  // are inserted pre-marked "found"/"existing", which keeps them out of
+  // pendingRows() entirely (see NewEnrichmentRow above).
+  const currentFieldsByContactId = new Map(
+    (await getContactCurrentFields(contactRows.map((c) => c.hubspotContactId))).map((r) => [r.id, r]),
+  );
+
   const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId));
 
   const [run] = await db
@@ -94,13 +125,24 @@ export async function triggerEnrichmentRun(formData: FormData) {
 
   await insertRows(
     run.id,
-    contactRows.map((c) => ({
-      contactId: c.hubspotContactId,
-      firstName: c.firstName,
-      lastName: c.lastName,
-      companyName: c.companyName,
-      domain: c.companyId ? (domainByCompanyId.get(c.companyId) ?? null) : null,
-    })),
+    contactRows.map((c) => {
+      const current = currentFieldsByContactId.get(c.hubspotContactId);
+      const currentMobile = current ? pickCurrentMobile(current) : null;
+      return {
+        contactId: c.hubspotContactId,
+        firstName: c.firstName,
+        lastName: c.lastName,
+        companyName: c.companyName,
+        domain: c.companyId ? (domainByCompanyId.get(c.companyId) ?? null) : null,
+        currentEmail: current?.email ?? null,
+        currentPhone: current?.phone ?? null,
+        currentWorkPhone: current?.work_phone ?? null,
+        currentMobilePhone: current?.mobilephone ?? null,
+        currentDirectPhone: current?.direct_phone ?? null,
+        ...(current?.email ? { emailStatus: "found" as const, email: current.email, emailSource: "existing" as const } : {}),
+        ...(currentMobile ? { mobileStatus: "found" as const, mobile: currentMobile, mobileSource: "existing" as const } : {}),
+      };
+    }),
   );
 
   revalidatePath("/enrichment");

@@ -17,7 +17,10 @@ export const ALL_STAGES = [
 export type Stage = (typeof ALL_STAGES)[number];
 
 export const EMAIL_STAGES: readonly Stage[] = ["hubspot_rematch", "leadmagic_email", "prospeo_email", "zerobounce"];
-export const MOBILE_STAGES: readonly Stage[] = ["leadmagic_mobile", "prospeo_mobile"];
+// hubspot_rematch checks both fields on the linked contact, so it belongs in
+// both lists — triggerEnrichmentStage uses these to decide which no_match/
+// error/rejected rows to reset to 'pending' before firing a scoped event.
+export const MOBILE_STAGES: readonly Stage[] = ["hubspot_rematch", "leadmagic_mobile", "prospeo_mobile"];
 
 export const STAGE_LABELS: Record<Stage, string> = {
   hubspot_rematch: "HubSpot Rematch",

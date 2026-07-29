@@ -131,6 +131,37 @@ export async function getContactPhoneFields(
   return records.map((r) => ({ id: r.id, ...r.properties }));
 }
 
+// mobilephone is the most specific "this is a cell number" signal HubSpot
+// has; direct_phone/work_phone/phone are progressively less specific but
+// still real, dialable numbers — first non-empty wins as "the current
+// mobile" shown to the user and used for existing-data dedup.
+export function pickCurrentMobile(fields: {
+  mobilephone?: string;
+  direct_phone?: string;
+  work_phone?: string;
+  phone?: string;
+}): string | null {
+  return fields.mobilephone || fields.direct_phone || fields.work_phone || fields.phone || null;
+}
+
+// Same fields as getContactPhoneFields plus email — used to snapshot a
+// contact's current CRM state onto its enrichment row at creation time (see
+// currentEmail/currentPhone* columns on enrichmentRows) so the spreadsheet
+// can show what's already on file, and so rows that already have data are
+// marked 'found'/'existing' up front instead of being enrichable at all.
+export async function getContactCurrentFields(contactIds: string[]): Promise<
+  Array<{ id: string; email?: string; phone?: string; work_phone?: string; mobilephone?: string; direct_phone?: string }>
+> {
+  const records = await batchReadObjects<{
+    email?: string;
+    phone?: string;
+    work_phone?: string;
+    mobilephone?: string;
+    direct_phone?: string;
+  }>("contacts", contactIds, ["email", "phone", "work_phone", "mobilephone", "direct_phone"]);
+  return records.map((r) => ({ id: r.id, ...r.properties }));
+}
+
 // --- Associations (v4) ------------------------------------------------------
 
 interface AssociationsBatchResponse {

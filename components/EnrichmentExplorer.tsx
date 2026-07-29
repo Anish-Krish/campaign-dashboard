@@ -18,13 +18,20 @@ import {
   triggerEnrichmentStage,
 } from "@/app/(dashboard)/enrichment/actions";
 import type { EnrichmentRowItem, EnrichmentRunListItem } from "@/lib/queries";
-import { ALL_STAGES, STAGE_LABELS, type Stage } from "@/lib/enrichment/stages";
+import { ALL_STAGES, EMAIL_STAGES, MOBILE_STAGES, STAGE_LABELS, type Stage } from "@/lib/enrichment/stages";
 
 const RUNNING_STATUSES = new Set(["queued", "running"]);
 const POLL_INTERVAL_MS = 2500;
 const RETRIABLE_STATUSES = new Set(["pending", "no_match", "error", "rejected"]);
 
 const SOURCE_COLUMN_IDS = ["name", "companyName", "domain"];
+const CURRENT_COLUMN_IDS = [
+  "currentEmail",
+  "currentPhone",
+  "currentWorkPhone",
+  "currentMobilePhone",
+  "currentDirectPhone",
+];
 const ENRICHMENT_COLUMN_IDS = [
   "email",
   "emailStatus",
@@ -35,6 +42,16 @@ const ENRICHMENT_COLUMN_IDS = [
   "creditsConsumed",
   "directPhonePushStatus",
 ];
+
+// Lets the Email/Mobile column-group headers fire a scoped waterfall
+// directly from the table (Clay-style "run this column"), without every
+// header render needing a fresh column-def identity — read off the live
+// `table` object at render time instead of closing over component state.
+type EnrichmentTableMeta = {
+  isBusy: boolean;
+  onRunEmail: () => void;
+  onRunMobile: () => void;
+};
 
 const inputStyle = { borderColor: "var(--border-hairline)", color: "var(--text-primary)" };
 
@@ -61,6 +78,27 @@ function StatusBadge({ status }: { status: string }) {
       />
       {status.replace("_", " ")}
     </span>
+  );
+}
+
+function ColumnGroupHeader({ label, title, onRun, disabled }: { label: string; title: string; onRun: () => void; disabled: boolean }) {
+  return (
+    <div className="flex items-center justify-center gap-1.5">
+      <span>{label}</span>
+      <button
+        type="button"
+        title={title}
+        disabled={disabled}
+        onClick={(e) => {
+          e.stopPropagation();
+          onRun();
+        }}
+        className="cursor-pointer disabled:cursor-not-allowed disabled:opacity-30"
+        style={{ color: "var(--series-blue)" }}
+      >
+        ▶
+      </button>
+    </div>
   );
 }
 
@@ -182,55 +220,123 @@ export function EnrichmentExplorer({
         ],
       },
       {
+        id: "current",
+        header: "Current (HubSpot)",
+        columns: [
+          {
+            id: "currentEmail",
+            header: "Current Email",
+            accessorKey: "currentEmail",
+            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+          },
+          {
+            id: "currentPhone",
+            header: "Current Phone",
+            accessorKey: "currentPhone",
+            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+          },
+          {
+            id: "currentWorkPhone",
+            header: "Current Work Phone",
+            accessorKey: "currentWorkPhone",
+            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+          },
+          {
+            id: "currentMobilePhone",
+            header: "Current Mobile Phone",
+            accessorKey: "currentMobilePhone",
+            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+          },
+          {
+            id: "currentDirectPhone",
+            header: "Current Direct Phone",
+            accessorKey: "currentDirectPhone",
+            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+          },
+        ],
+      },
+      {
         id: "enrichment",
         header: "Enrichment",
         columns: [
           {
-            id: "email",
-            header: "Email",
-            accessorKey: "email",
-            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+            id: "emailGroup",
+            header: ({ table }) => {
+              const meta = table.options.meta as EnrichmentTableMeta;
+              return (
+                <ColumnGroupHeader
+                  label="Email"
+                  title="Run full email waterfall (HubSpot → LeadMagic → Prospeo → ZeroBounce)"
+                  onRun={meta.onRunEmail}
+                  disabled={meta.isBusy}
+                />
+              );
+            },
+            columns: [
+              {
+                id: "email",
+                header: "Email",
+                accessorKey: "email",
+                cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+              },
+              {
+                id: "emailStatus",
+                header: "Email Status",
+                accessorKey: "emailStatus",
+                cell: (ctx) => <StatusBadge status={ctx.getValue<string>()} />,
+              },
+              {
+                id: "emailSource",
+                header: "Email Source",
+                accessorKey: "emailSource",
+                cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+              },
+            ],
           },
           {
-            id: "emailStatus",
-            header: "Email Status",
-            accessorKey: "emailStatus",
-            cell: (ctx) => <StatusBadge status={ctx.getValue<string>()} />,
-          },
-          {
-            id: "emailSource",
-            header: "Email Source",
-            accessorKey: "emailSource",
-            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
-          },
-          {
-            id: "mobile",
-            header: "Mobile",
-            accessorKey: "mobile",
-            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
-          },
-          {
-            id: "mobileStatus",
-            header: "Mobile Status",
-            accessorKey: "mobileStatus",
-            cell: (ctx) => <StatusBadge status={ctx.getValue<string>()} />,
-          },
-          {
-            id: "mobileSource",
-            header: "Mobile Source",
-            accessorKey: "mobileSource",
-            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+            id: "mobileGroup",
+            header: ({ table }) => {
+              const meta = table.options.meta as EnrichmentTableMeta;
+              return (
+                <ColumnGroupHeader
+                  label="Mobile"
+                  title="Run full mobile waterfall (HubSpot → LeadMagic → Prospeo)"
+                  onRun={meta.onRunMobile}
+                  disabled={meta.isBusy}
+                />
+              );
+            },
+            columns: [
+              {
+                id: "mobile",
+                header: "Mobile",
+                accessorKey: "mobile",
+                cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+              },
+              {
+                id: "mobileStatus",
+                header: "Mobile Status",
+                accessorKey: "mobileStatus",
+                cell: (ctx) => <StatusBadge status={ctx.getValue<string>()} />,
+              },
+              {
+                id: "mobileSource",
+                header: "Mobile Source",
+                accessorKey: "mobileSource",
+                cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+              },
+              {
+                id: "directPhonePushStatus",
+                header: "Direct Phone Push",
+                accessorKey: "directPhonePushStatus",
+                cell: (ctx) => <StatusBadge status={ctx.getValue<string>()} />,
+              },
+            ],
           },
           {
             id: "creditsConsumed",
             header: "Credits",
             accessorKey: "creditsConsumed",
-          },
-          {
-            id: "directPhonePushStatus",
-            header: "Direct Phone Push",
-            accessorKey: "directPhonePushStatus",
-            cell: (ctx) => <StatusBadge status={ctx.getValue<string>()} />,
           },
         ],
       },
@@ -238,36 +344,11 @@ export function EnrichmentExplorer({
     [],
   );
 
-  const table = useReactTable({
-    data: rows,
-    columns,
-    state: { sorting, globalFilter: search, rowSelection, columnVisibility },
-    getRowId: (row) => String(row.id),
-    enableRowSelection: true,
-    onRowSelectionChange: setRowSelection,
-    onColumnVisibilityChange: setColumnVisibility,
-    onSortingChange: setSorting,
-    onGlobalFilterChange: setSearch,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    globalFilterFn: (row, _columnId, filterValue) => {
-      const needle = String(filterValue).toLowerCase();
-      const name = [row.original.firstName, row.original.lastName].filter(Boolean).join(" ");
-      return [name, row.original.companyName, row.original.email, row.original.mobile]
-        .filter(Boolean)
-        .some((v) => v!.toLowerCase().includes(needle));
-    },
-  });
-
-  function toggleGroup(ids: string[]) {
-    const anyVisible = ids.some((id) => table.getColumn(id)?.getIsVisible() ?? true);
-    for (const id of ids) table.getColumn(id)?.toggleVisibility(!anyVisible);
-  }
-
   const selectedRowIds = Object.entries(rowSelection)
     .filter(([, selected]) => selected)
     .map(([id]) => Number(id));
+
+  const isBusy = isTriggering || isPushing || (run ? RUNNING_STATUSES.has(run.status) : false);
 
   async function handleTriggerStage(stages: Stage[] | undefined) {
     setIsTriggering(true);
@@ -297,7 +378,38 @@ export function EnrichmentExplorer({
     }
   }
 
-  const isBusy = isTriggering || isPushing || (run ? RUNNING_STATUSES.has(run.status) : false);
+  const table = useReactTable({
+    data: rows,
+    columns,
+    state: { sorting, globalFilter: search, rowSelection, columnVisibility },
+    getRowId: (row) => String(row.id),
+    enableRowSelection: true,
+    onRowSelectionChange: setRowSelection,
+    onColumnVisibilityChange: setColumnVisibility,
+    onSortingChange: setSorting,
+    onGlobalFilterChange: setSearch,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    globalFilterFn: (row, _columnId, filterValue) => {
+      const needle = String(filterValue).toLowerCase();
+      const name = [row.original.firstName, row.original.lastName].filter(Boolean).join(" ");
+      return [name, row.original.companyName, row.original.email, row.original.mobile]
+        .filter(Boolean)
+        .some((v) => v!.toLowerCase().includes(needle));
+    },
+    meta: {
+      isBusy,
+      onRunEmail: () => handleTriggerStage(EMAIL_STAGES as Stage[]),
+      onRunMobile: () => handleTriggerStage(MOBILE_STAGES as Stage[]),
+    } satisfies EnrichmentTableMeta,
+  });
+
+  function toggleGroup(ids: string[]) {
+    const anyVisible = ids.some((id) => table.getColumn(id)?.getIsVisible() ?? true);
+    for (const id of ids) table.getColumn(id)?.toggleVisibility(!anyVisible);
+  }
+
   const emailRetriableCount = rows.filter((r) => RETRIABLE_STATUSES.has(r.emailStatus)).length;
   const mobileRetriableCount = rows.filter((r) => RETRIABLE_STATUSES.has(r.mobileStatus)).length;
 
@@ -388,6 +500,14 @@ export function EnrichmentExplorer({
             style={{ borderColor: "var(--border-hairline)", color: "var(--text-secondary)" }}
           >
             Toggle Source columns
+          </button>
+          <button
+            type="button"
+            onClick={() => toggleGroup(CURRENT_COLUMN_IDS)}
+            className="cursor-pointer rounded-full border px-3 py-1 text-xs transition"
+            style={{ borderColor: "var(--border-hairline)", color: "var(--text-secondary)" }}
+          >
+            Toggle Current columns
           </button>
           <button
             type="button"
