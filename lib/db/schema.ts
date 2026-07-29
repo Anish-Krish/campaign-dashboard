@@ -187,7 +187,7 @@ export const enrichmentRuns = pgTable("enrichment_runs", {
   id: serial("id").primaryKey(),
   campaignId: integer("campaign_id").references(() => campaigns.id, { onDelete: "cascade" }),
   label: text("label"),
-  status: text("status").notNull().default("queued"), // queued | running | success | error | partial
+  status: text("status").notNull().default("queued"), // draft | queued | running | success | error | partial
   currentStage: text("current_stage"),
   totalRows: integer("total_rows").notNull().default(0),
   processedRows: integer("processed_rows").notNull().default(0),

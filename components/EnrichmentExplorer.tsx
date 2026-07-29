@@ -39,6 +39,7 @@ const ENRICHMENT_COLUMN_IDS = [
 const inputStyle = { borderColor: "var(--border-hairline)", color: "var(--text-primary)" };
 
 const STATUS_COLORS: Record<string, string> = {
+  draft: "var(--text-muted)",
   pending: "var(--text-muted)",
   found: "var(--series-aqua)",
   no_match: "var(--text-muted)",
@@ -95,6 +96,11 @@ function RunProgress({ run }: { run: EnrichmentRunListItem }) {
       {run.status === "error" && run.errorMessage && (
         <p className="text-xs" style={{ color: "var(--series-red)" }}>
           {run.errorMessage}
+        </p>
+      )}
+      {run.status === "draft" && (
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          Loaded — nothing enriched yet. Select rows (optional) and click a stage below to run it.
         </p>
       )}
     </div>

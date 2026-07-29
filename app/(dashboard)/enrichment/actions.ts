@@ -26,14 +26,17 @@ type NewEnrichmentRow = {
 };
 
 // Shared tail for both entry points below (campaign-sourced and
-// CSV-sourced): insert the rows, fire the event. Mirrors how
-// lib/sync.ts's runSyncJob() is the single place that does the real work
-// regardless of what triggered it.
-async function insertRowsAndFireEvent(runId: number, rows: NewEnrichmentRow[]) {
+// CSV-sourced): just insert the rows. Deliberately does NOT fire the
+// enrichment event — selecting a campaign or uploading a CSV should show the
+// full spreadsheet (source columns populated, enrichment columns empty)
+// immediately, Clay-style, with zero provider calls made until the user
+// clicks a stage button. Runs are created in "draft" status; the run only
+// moves to "queued" (and stages actually start) via triggerEnrichmentStage
+// below.
+async function insertRows(runId: number, rows: NewEnrichmentRow[]) {
   for (const batch of chunk(rows, 200)) {
     await db.insert(enrichmentRows).values(batch.map((r) => ({ runId, ...r })));
   }
-  await inngest.send({ name: "enrichment/run.requested", data: { runId } });
 }
 
 // Builds enrichment_rows from an existing campaign's contacts/companies
@@ -83,13 +86,13 @@ export async function triggerEnrichmentRun(formData: FormData) {
     .values({
       campaignId,
       label: `${campaign?.name ?? "Campaign"} — ${authorityOnly ? "authority contacts" : "all contacts"}`,
-      status: "queued",
+      status: "draft",
       triggerSource: "manual_ui",
       totalRows: contactRows.length,
     })
     .returning();
 
-  await insertRowsAndFireEvent(
+  await insertRows(
     run.id,
     contactRows.map((c) => ({
       contactId: c.hubspotContactId,
@@ -155,13 +158,13 @@ export async function triggerEnrichmentRunFromRows(
     .values({
       campaignId: null,
       label: label || "Uploaded list",
-      status: "queued",
+      status: "draft",
       triggerSource: "manual_ui",
       totalRows: rows.length,
     })
     .returning();
 
-  await insertRowsAndFireEvent(
+  await insertRows(
     run.id,
     rows.map((r) => ({
       contactId: null,
