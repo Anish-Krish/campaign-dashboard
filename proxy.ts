@@ -17,8 +17,11 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // Everything except /login, /api/sync (auth'd separately via CRON_SECRET),
-    // and Next.js internals/static assets.
-    "/((?!login|api/sync|_next/static|_next/image|favicon.ico).*)",
+    // Everything except /login, /api/sync (auth'd separately via
+    // CRON_SECRET), /api/inngest (called directly by Inngest's servers,
+    // authenticated via INNGEST_SIGNING_KEY inside the route handler itself
+    // — it never carries our session cookie), and Next.js internals/static
+    // assets.
+    "/((?!login|api/sync|api/inngest|_next/static|_next/image|favicon.ico).*)",
   ],
 };
