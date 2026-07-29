@@ -6,7 +6,7 @@ import { parse } from "csv-parse/sync";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { campaigns, companies, contacts, enrichmentRows, enrichmentRuns } from "@/lib/db/schema";
-import { batchReadObjects } from "@/lib/hubspot";
+import { batchReadObjects, batchUpdateObjects, getContactPhoneFields } from "@/lib/hubspot";
 import { inngest } from "@/lib/inngest/client";
 import { getEnrichmentRun, getEnrichmentRows } from "@/lib/queries";
 import { EMAIL_STAGES, MOBILE_STAGES, type Stage } from "@/lib/enrichment/stages";
@@ -208,6 +208,89 @@ export async function triggerEnrichmentStage(runId: number, stages?: Stage[], ro
     .where(eq(enrichmentRuns.id, runId));
 
   await inngest.send({ name: "enrichment/run.requested", data: { runId, stages, rowIds } });
+
+  revalidatePath("/enrichment");
+}
+
+// Normalizes to bare digits, canonicalized to a 10-digit NANP number where
+// applicable (an 11-digit number starting with "1" is the same number as
+// its 10-digit form without the country code) — so "+1 416-555-1234",
+// "14165551234", and "(416) 555-1234" all compare equal.
+function normalizePhoneDigits(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length === 11 && digits.startsWith("1")) return digits.slice(1);
+  return digits || null;
+}
+
+// The app's first-ever write to HubSpot — this app has been strictly
+// read-only until this point, so it's deliberately manual/batch-confirmed
+// (never automatic on enrichment success): pushes a newly-found mobile
+// number into HubSpot's direct_phone property, but only for rows where it's
+// genuinely new — a live digit-normalized comparison against the contact's
+// current phone/work_phone/mobilephone/direct_phone catches the exact
+// "ZoomInfo returned a number we already had, just reformatted" case found
+// earlier by hand. Scoped to selected rows if given, otherwise every
+// eligible row in the run.
+export async function pushDirectPhoneToHubspot(runId: number, rowIds?: number[]) {
+  const eligible = await db
+    .select()
+    .from(enrichmentRows)
+    .where(
+      and(
+        eq(enrichmentRows.runId, runId),
+        eq(enrichmentRows.mobileStatus, "found"),
+        eq(enrichmentRows.directPhonePushStatus, "not_pushed"),
+        rowIds && rowIds.length > 0 ? inArray(enrichmentRows.id, rowIds) : undefined,
+      ),
+    );
+  const withContact = eligible.filter((r) => r.contactId && r.mobile);
+  if (withContact.length === 0) return;
+
+  const phoneFields = await getContactPhoneFields(withContact.map((r) => r.contactId!));
+  const phoneFieldsByContactId = new Map(phoneFields.map((p) => [p.id, p]));
+
+  // Dedup check only (no writes yet) — decide which rows are genuinely new
+  // vs. already-known-duplicates.
+  const toWrite: typeof withContact = [];
+  for (const row of withContact) {
+    const existing = phoneFieldsByContactId.get(row.contactId!);
+    const newDigits = normalizePhoneDigits(row.mobile);
+    const existingDigits = [existing?.phone, existing?.work_phone, existing?.mobilephone, existing?.direct_phone]
+      .map(normalizePhoneDigits)
+      .filter(Boolean);
+
+    if (newDigits && existingDigits.includes(newDigits)) {
+      await db
+        .update(enrichmentRows)
+        .set({ directPhonePushStatus: "skipped_duplicate", directPhonePushedAt: new Date() })
+        .where(eq(enrichmentRows.id, row.id));
+    } else {
+      toWrite.push(row);
+    }
+  }
+
+  // Only mark a row 'pushed' once the HubSpot write has actually succeeded —
+  // never optimistically, since a failed write must not be recorded as done.
+  if (toWrite.length > 0) {
+    try {
+      await batchUpdateObjects(
+        "contacts",
+        toWrite.map((row) => ({ id: row.contactId!, properties: { direct_phone: row.mobile! } })),
+      );
+      for (const row of toWrite) {
+        await db
+          .update(enrichmentRows)
+          .set({ directPhonePushStatus: "pushed", directPhonePushedAt: new Date() })
+          .where(eq(enrichmentRows.id, row.id));
+      }
+    } catch (err) {
+      console.error(`[enrichment] direct_phone batch push failed for run ${runId}:`, err);
+      for (const row of toWrite) {
+        await db.update(enrichmentRows).set({ directPhonePushStatus: "error" }).where(eq(enrichmentRows.id, row.id));
+      }
+    }
+  }
 
   revalidatePath("/enrichment");
 }

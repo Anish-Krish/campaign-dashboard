@@ -87,6 +87,50 @@ export async function batchReadObjects<P extends Record<string, unknown>>(
   return pages.flatMap((p) => p.results);
 }
 
+// --- Generic batch object write ---------------------------------------------
+// First write path this app has ever had — everything else is read-only.
+// Same batch-of-100 shape as batchReadObjects, mirroring HubSpot's own
+// batch/update endpoint (POST /crm/v3/objects/{type}/batch/update, body
+// { inputs: [{ id, properties }] }).
+
+interface BatchUpdateResult {
+  results: Array<{ id: string }>;
+}
+
+export async function batchUpdateObjects(
+  objectType: string,
+  updates: Array<{ id: string; properties: Record<string, string> }>,
+): Promise<void> {
+  const chunks = chunk(updates, 100).filter((c) => c.length > 0);
+  await Promise.all(
+    chunks.map((c) =>
+      hubspotFetch<BatchUpdateResult>(`/crm/v3/objects/${objectType}/batch/update`, {
+        method: "POST",
+        body: JSON.stringify({ inputs: c }),
+      }),
+    ),
+  );
+}
+
+// Live-read of a contact's phone-ish properties, used only at push-time (not
+// cached locally) so the dedup check in pushDirectPhoneToHubspot always
+// compares against HubSpot's current state, not a stale local copy.
+// Verified live against this portal's actual properties (GET
+// /crm/v3/properties/contacts) — direct_phone and work_phone are
+// portal-specific custom properties, distinct from the standard phone/
+// mobilephone fields.
+export async function getContactPhoneFields(
+  contactIds: string[],
+): Promise<Array<{ id: string; phone?: string; work_phone?: string; mobilephone?: string; direct_phone?: string }>> {
+  const records = await batchReadObjects<{
+    phone?: string;
+    work_phone?: string;
+    mobilephone?: string;
+    direct_phone?: string;
+  }>("contacts", contactIds, ["phone", "work_phone", "mobilephone", "direct_phone"]);
+  return records.map((r) => ({ id: r.id, ...r.properties }));
+}
+
 // --- Associations (v4) ------------------------------------------------------
 
 interface AssociationsBatchResponse {

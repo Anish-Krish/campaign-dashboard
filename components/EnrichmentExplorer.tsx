@@ -12,7 +12,11 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { getEnrichmentRunSnapshot, triggerEnrichmentStage } from "@/app/(dashboard)/enrichment/actions";
+import {
+  getEnrichmentRunSnapshot,
+  pushDirectPhoneToHubspot,
+  triggerEnrichmentStage,
+} from "@/app/(dashboard)/enrichment/actions";
 import type { EnrichmentRowItem, EnrichmentRunListItem } from "@/lib/queries";
 import { ALL_STAGES, STAGE_LABELS, type Stage } from "@/lib/enrichment/stages";
 
@@ -29,6 +33,7 @@ const ENRICHMENT_COLUMN_IDS = [
   "mobileStatus",
   "mobileSource",
   "creditsConsumed",
+  "directPhonePushStatus",
 ];
 
 const inputStyle = { borderColor: "var(--border-hairline)", color: "var(--text-primary)" };
@@ -40,6 +45,9 @@ const STATUS_COLORS: Record<string, string> = {
   rejected: "var(--series-orange)",
   error: "var(--series-red)",
   skipped: "var(--text-muted)",
+  not_pushed: "var(--text-muted)",
+  pushed: "var(--series-aqua)",
+  skipped_duplicate: "var(--text-muted)",
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -109,6 +117,7 @@ export function EnrichmentExplorer({
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   const [isTriggering, setIsTriggering] = useState(false);
+  const [isPushing, setIsPushing] = useState(false);
 
   useEffect(() => {
     setRun(initialRun);
@@ -211,6 +220,12 @@ export function EnrichmentExplorer({
             header: "Credits",
             accessorKey: "creditsConsumed",
           },
+          {
+            id: "directPhonePushStatus",
+            header: "Direct Phone Push",
+            accessorKey: "directPhonePushStatus",
+            cell: (ctx) => <StatusBadge status={ctx.getValue<string>()} />,
+          },
         ],
       },
     ],
@@ -262,7 +277,21 @@ export function EnrichmentExplorer({
     }
   }
 
-  const isBusy = isTriggering || (run ? RUNNING_STATUSES.has(run.status) : false);
+  async function handlePushToHubspot() {
+    setIsPushing(true);
+    try {
+      const rowIds = selectedRowIds.length > 0 ? selectedRowIds : undefined;
+      await pushDirectPhoneToHubspot(runId, rowIds);
+      const snapshot = await getEnrichmentRunSnapshot(runId);
+      setRun(snapshot.run);
+      setRows(snapshot.rows);
+      setRowSelection({});
+    } finally {
+      setIsPushing(false);
+    }
+  }
+
+  const isBusy = isTriggering || isPushing || (run ? RUNNING_STATUSES.has(run.status) : false);
   const emailRetriableCount = rows.filter((r) => RETRIABLE_STATUSES.has(r.emailStatus)).length;
   const mobileRetriableCount = rows.filter((r) => RETRIABLE_STATUSES.has(r.mobileStatus)).length;
 
@@ -276,6 +305,9 @@ export function EnrichmentExplorer({
   const foundEmail = rows.filter((r) => r.emailStatus === "found").length;
   const foundMobile = rows.filter((r) => r.mobileStatus === "found").length;
   const totalCredits = rows.reduce((sum, r) => sum + r.creditsConsumed, 0);
+  const pendingPushCount = rows.filter(
+    (r) => r.mobileStatus === "found" && r.directPhonePushStatus === "not_pushed",
+  ).length;
 
   if (!run) return null;
 
@@ -310,6 +342,28 @@ export function EnrichmentExplorer({
           </button>
         </div>
       </div>
+
+      {pendingPushCount > 0 && (
+        <div
+          className="hud-panel flex flex-wrap items-center justify-between gap-3 p-4"
+          style={{ borderColor: "var(--series-blue)" }}
+        >
+          <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
+            {selectedRowIds.length > 0
+              ? `${selectedRowIds.length} row(s) selected — push their mobile number to HubSpot's Direct Phone field?`
+              : `${pendingPushCount} new mobile number(s) found — push to HubSpot's Direct Phone field?`}
+            {" "}Numbers already matching an existing phone field on the contact are skipped automatically.
+          </p>
+          <button
+            type="button"
+            disabled={isBusy}
+            onClick={handlePushToHubspot}
+            className="hud-button shrink-0 rounded px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {isPushing ? "Pushing…" : "Push to HubSpot"}
+          </button>
+        </div>
+      )}
 
       <div className="hud-panel space-y-3 p-4">
         <div className="flex flex-wrap items-center gap-3">
