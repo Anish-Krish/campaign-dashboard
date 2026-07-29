@@ -30,6 +30,9 @@ export function Nav() {
             <Link href="/reps" className="transition hover:text-[var(--series-blue)]">
               Reps
             </Link>
+            <Link href="/enrichment" className="transition hover:text-[var(--series-blue)]">
+              Enrichment
+            </Link>
             <Link href="/settings" className="transition hover:text-[var(--series-blue)]">
               Settings
             </Link>

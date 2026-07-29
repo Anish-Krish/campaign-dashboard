@@ -5,6 +5,8 @@ import {
   campaigns,
   companies,
   contacts,
+  enrichmentRows,
+  enrichmentRuns,
   meetingEvents,
   owners,
   syncRuns,
@@ -746,6 +748,84 @@ export async function getRepDailyCallStats(ownerId: string, range: { startDate: 
     connects: Number(r.connects),
     wrongTitle: Number(r.wrongTitle),
   }));
+}
+
+// For the "Start Enrichment" campaign picker — surfaces counts up front so
+// the user knows roughly how many provider credits a run is about to spend
+// before clicking, rather than finding out after the fact.
+export async function getCampaignsForEnrichment() {
+  const rows = await db
+    .select({
+      id: campaigns.id,
+      name: campaigns.name,
+      totalContacts: sql<number>`count(${contacts.hubspotContactId})`.mapWith(Number),
+      authorityContacts: sql<number>`count(${contacts.hubspotContactId}) filter (where ${contacts.isAuthority})`.mapWith(
+        Number,
+      ),
+    })
+    .from(campaigns)
+    .leftJoin(contacts, eq(contacts.campaignId, campaigns.id))
+    .groupBy(campaigns.id)
+    .orderBy(desc(campaigns.createdAt));
+  return rows;
+}
+
+export type EnrichmentRunListItem = {
+  id: number;
+  label: string | null;
+  campaignId: number | null;
+  campaignName: string | null;
+  status: string;
+  currentStage: string | null;
+  totalRows: number;
+  processedRows: number;
+  triggerSource: string;
+  startedAt: Date;
+  finishedAt: Date | null;
+  errorMessage: string | null;
+};
+
+const enrichmentRunSelection = {
+  id: enrichmentRuns.id,
+  label: enrichmentRuns.label,
+  campaignId: enrichmentRuns.campaignId,
+  campaignName: campaigns.name,
+  status: enrichmentRuns.status,
+  currentStage: enrichmentRuns.currentStage,
+  totalRows: enrichmentRuns.totalRows,
+  processedRows: enrichmentRuns.processedRows,
+  triggerSource: enrichmentRuns.triggerSource,
+  startedAt: enrichmentRuns.startedAt,
+  finishedAt: enrichmentRuns.finishedAt,
+  errorMessage: enrichmentRuns.errorMessage,
+};
+
+export async function getEnrichmentRuns(limit = 20): Promise<EnrichmentRunListItem[]> {
+  return db
+    .select(enrichmentRunSelection)
+    .from(enrichmentRuns)
+    .leftJoin(campaigns, eq(enrichmentRuns.campaignId, campaigns.id))
+    .orderBy(desc(enrichmentRuns.startedAt))
+    .limit(limit);
+}
+
+export async function getEnrichmentRun(runId: number): Promise<EnrichmentRunListItem | null> {
+  const [row] = await db
+    .select(enrichmentRunSelection)
+    .from(enrichmentRuns)
+    .leftJoin(campaigns, eq(enrichmentRuns.campaignId, campaigns.id))
+    .where(eq(enrichmentRuns.id, runId));
+  return row ?? null;
+}
+
+export type EnrichmentRowItem = typeof enrichmentRows.$inferSelect;
+
+export async function getEnrichmentRows(runId: number): Promise<EnrichmentRowItem[]> {
+  return db
+    .select()
+    .from(enrichmentRows)
+    .where(eq(enrichmentRows.runId, runId))
+    .orderBy(enrichmentRows.lastName, enrichmentRows.firstName);
 }
 
 // Same shape as getDailyMeetingStats, filtered by owner + date range instead

@@ -12,6 +12,7 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@tanstack/react-table": "^8.21.3",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
     "inngest": "^4.13.0",
