@@ -48,11 +48,11 @@ type EnrichmentTableMeta = {
 
 const inputStyle = { borderColor: "var(--border-hairline)", color: "var(--text-primary)" };
 
-// Header background tint by section, applied to both the top-level "Enrichment"
-// group cell and its leaf columns, so the whole section reads as one visual
-// block against the neutral Source Data columns.
+// Tints the Enrichment columns' header cells so that section still reads as
+// one visual block against the neutral Source columns, even with a single
+// flat header row (no group label row above them).
 function headerTint(id: string): string | null {
-  if (id === "enrichment" || ENRICHMENT_COLUMN_IDS.includes(id)) return "var(--series-blue)";
+  if (ENRICHMENT_COLUMN_IDS.includes(id)) return "var(--series-blue)";
   return null;
 }
 
@@ -256,108 +256,96 @@ export function EnrichmentExplorer({
         enableSorting: false,
         size: 32,
       },
+      // Flat — no "Source Data"/"Enrichment" group row above these. A group
+      // label row that just repeats a generic section name was less useful
+      // than seeing the actual field name immediately; the group-color
+      // tinting (headerTint below) still marks which section each column
+      // belongs to without needing a dedicated label row for it.
       {
-        id: "source",
-        header: "Source Data",
-        columns: [
-          {
-            id: "name",
-            header: "Name",
-            accessorFn: (r) => [r.firstName, r.lastName].filter(Boolean).join(" ") || "(no name)",
-          },
-          {
-            id: "companyName",
-            header: "Company",
-            accessorKey: "companyName",
-            cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} />,
-          },
-          {
-            id: "domain",
-            header: "Domain",
-            accessorKey: "domain",
-            cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} mono />,
-          },
-        ],
+        id: "name",
+        header: "Name",
+        accessorFn: (r) => [r.firstName, r.lastName].filter(Boolean).join(" ") || "(no name)",
       },
       {
-        id: "enrichment",
-        header: "Enrichment",
-        // Deliberately flat (no emailGroup/mobileGroup sub-level) — a nested
-        // group here but not under Source Data gave the two sections
-        // mismatched header depths, which is what actually caused the
-        // "Email"/"Mobile" labels to render twice stacked on top of each
-        // other. One consistent depth for every group now.
-        columns: [
-          {
-            id: "email",
-            header: ({ table }) => {
-              const meta = table.options.meta as EnrichmentTableMeta;
-              return (
-                <ColumnGroupHeader
-                  label="Email"
-                  title="Run full email waterfall (HubSpot → LeadMagic → Prospeo → ZeroBounce)"
-                  onRun={meta.onRunEmail}
-                  disabled={meta.isBusy}
-                />
-              );
-            },
-            accessorKey: "email",
-            enableSorting: false,
-            cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} mono />,
-          },
-          {
-            id: "emailStatus",
-            header: "Email Status",
-            accessorKey: "emailStatus",
-            cell: (ctx) => <StatusBadge status={ctx.getValue<string>()} />,
-          },
-          {
-            id: "emailSource",
-            header: "Email Source",
-            accessorKey: "emailSource",
-            cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} />,
-          },
-          {
-            id: "mobile",
-            header: ({ table }) => {
-              const meta = table.options.meta as EnrichmentTableMeta;
-              return (
-                <ColumnGroupHeader
-                  label="Mobile Phone"
-                  title="Run full mobile waterfall (HubSpot → LeadMagic → Prospeo)"
-                  onRun={meta.onRunMobile}
-                  disabled={meta.isBusy}
-                />
-              );
-            },
-            accessorKey: "mobile",
-            enableSorting: false,
-            cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} mono />,
-          },
-          {
-            id: "mobileStatus",
-            header: "Mobile Status",
-            accessorKey: "mobileStatus",
-            cell: (ctx) => <StatusBadge status={ctx.getValue<string>()} />,
-          },
-          {
-            id: "mobileSource",
-            header: "Mobile Source",
-            accessorKey: "mobileSource",
-            cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} />,
-          },
-          {
-            id: "directPhonePushStatus",
-            header: "Direct Phone Push",
-            accessorKey: "directPhonePushStatus",
-            cell: (ctx) => <StatusBadge status={ctx.getValue<string>()} />,
-          },
-          {
-            id: "creditsConsumed",
-            header: "Credits",
-            accessorKey: "creditsConsumed",
-          },
-        ],
+        id: "companyName",
+        header: "Company Name",
+        accessorKey: "companyName",
+        cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} />,
+      },
+      {
+        id: "domain",
+        header: "Domain",
+        accessorKey: "domain",
+        cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} mono />,
+      },
+      {
+        id: "email",
+        header: ({ table }) => {
+          const meta = table.options.meta as EnrichmentTableMeta;
+          return (
+            <ColumnGroupHeader
+              label="Email"
+              title="Run full email waterfall (HubSpot → LeadMagic → Prospeo → ZeroBounce)"
+              onRun={meta.onRunEmail}
+              disabled={meta.isBusy}
+            />
+          );
+        },
+        accessorKey: "email",
+        enableSorting: false,
+        cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} mono />,
+      },
+      {
+        id: "emailStatus",
+        header: "Email Status",
+        accessorKey: "emailStatus",
+        cell: (ctx) => <StatusBadge status={ctx.getValue<string>()} />,
+      },
+      {
+        id: "emailSource",
+        header: "Email Source",
+        accessorKey: "emailSource",
+        cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} />,
+      },
+      {
+        id: "mobile",
+        header: ({ table }) => {
+          const meta = table.options.meta as EnrichmentTableMeta;
+          return (
+            <ColumnGroupHeader
+              label="Mobile Phone"
+              title="Run full mobile waterfall (HubSpot → LeadMagic → Prospeo)"
+              onRun={meta.onRunMobile}
+              disabled={meta.isBusy}
+            />
+          );
+        },
+        accessorKey: "mobile",
+        enableSorting: false,
+        cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} mono />,
+      },
+      {
+        id: "mobileStatus",
+        header: "Mobile Status",
+        accessorKey: "mobileStatus",
+        cell: (ctx) => <StatusBadge status={ctx.getValue<string>()} />,
+      },
+      {
+        id: "mobileSource",
+        header: "Mobile Source",
+        accessorKey: "mobileSource",
+        cell: (ctx) => <DataCell value={ctx.getValue<string | null>()} />,
+      },
+      {
+        id: "directPhonePushStatus",
+        header: "Direct Phone Push",
+        accessorKey: "directPhonePushStatus",
+        cell: (ctx) => <StatusBadge status={ctx.getValue<string>()} />,
+      },
+      {
+        id: "creditsConsumed",
+        header: "Credits",
+        accessorKey: "creditsConsumed",
       },
     ],
     [],
