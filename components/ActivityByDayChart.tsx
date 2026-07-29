@@ -17,12 +17,23 @@ export type DailyMeetingStat = {
   meetingsBooked: number;
 };
 
-const LANE_HEIGHT = 56;
-const BAR_WIDTH = 18;
-const BAR_GAP = 6;
+type Column = {
+  date: string;
+  callsMade: number;
+  connects: number;
+  wrongTitle: number;
+  meetingsBooked: number;
+};
+
+const COLUMN_WIDTH = 24;
+const FRONT_WIDTH = 12;
+const COLUMN_GAP = 8;
 const SEGMENT_GAP = 2;
-const COLUMN_PX = BAR_WIDTH + BAR_GAP;
-const LABEL_COL_WIDTH = 78;
+const COLUMN_PX = COLUMN_WIDTH + COLUMN_GAP;
+const MARKER_ROW_HEIGHT = 24;
+const BAR_AREA_HEIGHT = 160;
+const AXIS_LABEL_HEIGHT = 18;
+const Y_AXIS_COL_WIDTH = 34;
 
 function toUTCDate(dateStr: string) {
   const [y, m, d] = dateStr.split("-").map(Number);
@@ -44,80 +55,12 @@ function formatFullDate(dateStr: string) {
   });
 }
 
-type Bar = { value: number; secondary?: number };
-
-// One lane = one independently-scaled mini bar chart. Bars are positioned
-// identically across all three lanes (same index -> same column), so
-// hovering any bar in any lane can highlight that day everywhere.
-function Lane({
-  bars,
-  color,
-  secondaryColor,
-  hoverIdx,
-  onHover,
-}: {
-  bars: Bar[];
-  color: string;
-  secondaryColor?: string;
-  hoverIdx: number | null;
-  onHover: (i: number | null) => void;
-}) {
-  const maxValue = Math.max(1, ...bars.map((b) => b.value + (b.secondary ?? 0)));
-
+function LegendSwatch({ color, opacity = 1, label }: { color: string; opacity?: number; label: string }) {
   return (
-    <div className="flex items-end" style={{ height: LANE_HEIGHT, gap: BAR_GAP }}>
-      {bars.map((b, i) => {
-        const primaryH = b.value > 0 ? Math.max(2, Math.round((b.value / maxValue) * LANE_HEIGHT)) : 0;
-        const secondaryH =
-          b.secondary && b.secondary > 0 ? Math.max(2, Math.round((b.secondary / maxValue) * LANE_HEIGHT)) : 0;
-        const isHovered = hoverIdx === i;
-
-        return (
-          <div
-            key={i}
-            className="relative flex-shrink-0"
-            style={{ width: BAR_WIDTH, height: LANE_HEIGHT }}
-            onMouseEnter={() => onHover(i)}
-            onMouseLeave={() => onHover(null)}
-          >
-            {isHovered && (
-              <div className="absolute inset-0 rounded-t" style={{ background: "rgba(14, 165, 183, 0.12)" }} />
-            )}
-            {primaryH === 0 && secondaryH === 0 && (
-              <div className="absolute bottom-0 w-full rounded-t" style={{ height: 2, background: "var(--gridline)" }} />
-            )}
-            {primaryH > 0 && (
-              <div
-                className={`absolute bottom-0 w-full transition-opacity ${secondaryH === 0 ? "rounded-t" : ""}`}
-                style={{ height: primaryH, background: color, opacity: isHovered ? 0.85 : 1 }}
-              />
-            )}
-            {secondaryH > 0 && (
-              <div
-                className="absolute w-full rounded-t transition-opacity"
-                style={{
-                  bottom: primaryH > 0 ? primaryH + SEGMENT_GAP : 0,
-                  height: secondaryH,
-                  background: secondaryColor,
-                  opacity: isHovered ? 0.85 : 1,
-                }}
-              />
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function LaneLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      className="hud-heading flex flex-shrink-0 items-center text-[10px]"
-      style={{ width: LABEL_COL_WIDTH, height: LANE_HEIGHT, color: "var(--text-muted)" }}
-    >
-      {children}
-    </div>
+    <span className="flex items-center gap-1.5">
+      <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: color, opacity }} />
+      {label}
+    </span>
   );
 }
 
@@ -130,23 +73,24 @@ export function ActivityByDayChart({
 }) {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
 
-  const { dates, callBars, connectBars, meetingBars } = useMemo(() => {
+  const columns = useMemo<Column[]>(() => {
     const callByDate = new Map(callStats.map((d) => [d.date, d]));
     const meetingByDate = new Map(meetingStats.map((d) => [d.date, d.meetingsBooked]));
     const dates = Array.from(new Set([...callByDate.keys(), ...meetingByDate.keys()])).sort();
 
-    return {
-      dates,
-      callBars: dates.map((date): Bar => ({ value: callByDate.get(date)?.callsMade ?? 0 })),
-      connectBars: dates.map((date): Bar => {
-        const d = callByDate.get(date);
-        return { value: d?.connects ?? 0, secondary: d?.wrongTitle ?? 0 };
-      }),
-      meetingBars: dates.map((date): Bar => ({ value: meetingByDate.get(date) ?? 0 })),
-    };
+    return dates.map((date) => {
+      const c = callByDate.get(date);
+      return {
+        date,
+        callsMade: c?.callsMade ?? 0,
+        connects: c?.connects ?? 0,
+        wrongTitle: c?.wrongTitle ?? 0,
+        meetingsBooked: meetingByDate.get(date) ?? 0,
+      };
+    });
   }, [callStats, meetingStats]);
 
-  if (dates.length === 0) {
+  if (columns.length === 0) {
     return (
       <p className="border-b px-5 py-4 text-xs" style={{ borderColor: "var(--gridline)", color: "var(--text-muted)" }}>
         No activity logged in this window yet.
@@ -154,58 +98,55 @@ export function ActivityByDayChart({
     );
   }
 
-  const labelStride = Math.max(1, Math.ceil(60 / COLUMN_PX), Math.ceil(dates.length / 20));
+  const hasCallData = columns.some((c) => c.callsMade > 0);
+  const maxCalls = hasCallData ? Math.max(1, ...columns.map((c) => c.callsMade)) : 0;
+  const labelStride = Math.max(1, Math.ceil(60 / COLUMN_PX), Math.ceil(columns.length / 20));
 
-  const totalCalls = callBars.reduce((sum, b) => sum + b.value, 0);
-  const totalConnects = connectBars.reduce((sum, b) => sum + b.value, 0);
-  const totalWrong = connectBars.reduce((sum, b) => sum + (b.secondary ?? 0), 0);
-  const totalMeetings = meetingBars.reduce((sum, b) => sum + b.value, 0);
-  const hoveredDate = hoverIdx != null ? dates[hoverIdx] : null;
+  const totalCalls = columns.reduce((sum, c) => sum + c.callsMade, 0);
+  const totalConnects = columns.reduce((sum, c) => sum + c.connects, 0);
+  const totalWrong = columns.reduce((sum, c) => sum + c.wrongTitle, 0);
+  const totalMeetings = columns.reduce((sum, c) => sum + c.meetingsBooked, 0);
+  const hovered = hoverIdx != null ? columns[hoverIdx] : null;
 
   return (
     <div className="border-b px-5 py-4" style={{ borderColor: "var(--gridline)" }}>
-      <div className="mb-3 flex items-center gap-4 text-xs" style={{ color: "var(--text-secondary)" }}>
-        <span className="flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: "var(--series-blue)" }} />
-          Connected
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: "var(--series-red)" }} />
-          Wrong title
-        </span>
+      <div className="mb-3 flex flex-wrap items-center gap-4 text-xs" style={{ color: "var(--text-secondary)" }}>
+        <LegendSwatch color="var(--series-blue)" opacity={0.28} label="Calls made" />
+        <LegendSwatch color="var(--series-blue)" label="Connected" />
+        <LegendSwatch color="var(--series-red)" label="Wrong title" />
+        <LegendSwatch color="var(--series-aqua)" label="Meeting booked" />
       </div>
 
-      {/* Shared readout, outside the scrolling bar area below so it's never
+      {/* Shared readout, outside the scrolling bar area so it's never
           clipped by it — shows totals by default, the hovered day's numbers
-          across all three lanes together on hover (the actual "compare by
-          day" payoff). */}
+          together on hover. */}
       <div className="mb-3 flex min-h-5 flex-wrap items-center gap-x-3 gap-y-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-        {hoveredDate ? (
+        {hovered ? (
           <>
             <span className="hud-heading text-xs" style={{ color: "var(--text-muted)" }}>
-              {formatFullDate(hoveredDate)}
+              {formatFullDate(hovered.date)}
             </span>
             <span>
-              <span className="font-semibold tabular-nums" style={{ color: "var(--series-blue)" }}>
-                {callBars[hoverIdx!].value}
+              <span className="font-semibold tabular-nums" style={{ color: "var(--text-primary)" }}>
+                {hovered.callsMade}
               </span>{" "}
               calls
             </span>
             <span>
               <span className="font-semibold tabular-nums" style={{ color: "var(--series-blue)" }}>
-                {connectBars[hoverIdx!].value}
+                {hovered.connects}
               </span>{" "}
               connected
             </span>
             <span>
               <span className="font-semibold tabular-nums" style={{ color: "var(--series-red)" }}>
-                {connectBars[hoverIdx!].secondary}
+                {hovered.wrongTitle}
               </span>{" "}
               wrong title
             </span>
             <span>
               <span className="font-semibold tabular-nums" style={{ color: "var(--series-aqua)" }}>
-                {meetingBars[hoverIdx!].value}
+                {hovered.meetingsBooked}
               </span>{" "}
               meetings
             </span>
@@ -228,39 +169,165 @@ export function ActivityByDayChart({
             <span className="font-medium tabular-nums" style={{ color: "var(--series-aqua)" }}>
               {totalMeetings}
             </span>{" "}
-            meetings across {dates.length} days — hover a bar for a specific day
+            meetings across {columns.length} days — hover a bar for a specific day
           </span>
         )}
       </div>
 
       <div className="flex">
-        <div className="flex flex-shrink-0 flex-col">
-          <LaneLabel>Calls</LaneLabel>
-          <LaneLabel>Connects</LaneLabel>
-          <LaneLabel>Meetings</LaneLabel>
-          <div style={{ width: LABEL_COL_WIDTH, height: 18 }} />
-        </div>
-        <div className="overflow-x-auto pb-1">
-          <div className="flex flex-col">
-            <Lane bars={callBars} color="var(--series-blue)" hoverIdx={hoverIdx} onHover={setHoverIdx} />
-            <Lane
-              bars={connectBars}
-              color="var(--series-blue)"
-              secondaryColor="var(--series-red)"
-              hoverIdx={hoverIdx}
-              onHover={setHoverIdx}
-            />
-            <Lane bars={meetingBars} color="var(--series-aqua)" hoverIdx={hoverIdx} onHover={setHoverIdx} />
-            <div className="mt-1.5 flex" style={{ width: "max-content", gap: BAR_GAP }}>
-              {dates.map((date, i) => (
-                <div
-                  key={date}
-                  className="flex-shrink-0 text-center text-[10px] whitespace-nowrap tabular-nums"
-                  style={{ width: BAR_WIDTH, color: hoverIdx === i ? "var(--series-blue)" : "var(--text-muted)" }}
+        {/* Y-axis: numeric ticks for the shared calls/connects scale. */}
+        <div className="flex flex-shrink-0 flex-col" style={{ width: Y_AXIS_COL_WIDTH }}>
+          <div style={{ height: MARKER_ROW_HEIGHT }} />
+          <div className="relative" style={{ height: BAR_AREA_HEIGHT }}>
+            {hasCallData && (
+              <>
+                <span
+                  className="absolute right-1.5 text-[10px] tabular-nums"
+                  style={{ top: 0, transform: "translateY(-50%)", color: "var(--text-muted)" }}
                 >
-                  {i % labelStride === 0 ? formatAxisLabel(date) : ""}
-                </div>
-              ))}
+                  {maxCalls}
+                </span>
+                <span
+                  className="absolute right-1.5 text-[10px] tabular-nums"
+                  style={{ top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }}
+                >
+                  {Math.round(maxCalls / 2)}
+                </span>
+              </>
+            )}
+            <span
+              className="absolute right-1.5 text-[10px] tabular-nums"
+              style={{ bottom: 0, transform: "translateY(50%)", color: "var(--text-muted)" }}
+            >
+              0
+            </span>
+          </div>
+          <div style={{ height: AXIS_LABEL_HEIGHT }} />
+        </div>
+
+        <div className="overflow-x-auto pb-1">
+          <div className="relative" style={{ width: "max-content" }}>
+            <div
+              className="absolute"
+              style={{ top: MARKER_ROW_HEIGHT, left: 0, right: 0, height: 1, background: "var(--gridline)" }}
+            />
+            <div
+              className="absolute"
+              style={{
+                top: MARKER_ROW_HEIGHT + BAR_AREA_HEIGHT / 2,
+                left: 0,
+                right: 0,
+                height: 1,
+                background: "var(--gridline)",
+              }}
+            />
+            <div
+              className="absolute"
+              style={{
+                top: MARKER_ROW_HEIGHT + BAR_AREA_HEIGHT,
+                left: 0,
+                right: 0,
+                height: 1,
+                background: "var(--gridline)",
+              }}
+            />
+
+            <div className="flex" style={{ gap: COLUMN_GAP }}>
+              {columns.map((col, i) => {
+                const backH =
+                  col.callsMade > 0 ? Math.max(2, Math.round((col.callsMade / maxCalls) * BAR_AREA_HEIGHT)) : 0;
+                const frontH =
+                  col.connects > 0 ? Math.max(2, Math.round((col.connects / maxCalls) * BAR_AREA_HEIGHT)) : 0;
+                const capH =
+                  col.wrongTitle > 0 ? Math.max(2, Math.round((col.wrongTitle / maxCalls) * BAR_AREA_HEIGHT)) : 0;
+                const capBottom = frontH + (frontH > 0 && capH > 0 ? SEGMENT_GAP : 0);
+                const isHovered = hoverIdx === i;
+
+                return (
+                  <div
+                    key={col.date}
+                    className="flex flex-shrink-0 flex-col"
+                    style={{ width: COLUMN_WIDTH }}
+                    onMouseEnter={() => setHoverIdx(i)}
+                    onMouseLeave={() => setHoverIdx(null)}
+                  >
+                    {/* Meeting marker row */}
+                    <div className="flex items-center justify-center gap-0.5" style={{ height: MARKER_ROW_HEIGHT }}>
+                      {col.meetingsBooked > 0 && (
+                        <>
+                          <span
+                            className="inline-block rounded-full"
+                            style={{ width: 6, height: 6, background: "var(--series-aqua)" }}
+                          />
+                          {col.meetingsBooked > 1 && (
+                            <span
+                              className="text-[10px] font-medium tabular-nums"
+                              style={{ color: "var(--series-aqua)" }}
+                            >
+                              {col.meetingsBooked}
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </div>
+
+                    {/* Bar area: back bar = Calls Made, front bar = Connects,
+                        capped with Wrong Title — all to the same scale, since
+                        connects + wrongTitle <= callsMade always. */}
+                    <div className="relative" style={{ height: BAR_AREA_HEIGHT }}>
+                      {isHovered && (
+                        <div className="absolute inset-0" style={{ background: "rgba(14, 165, 183, 0.1)" }} />
+                      )}
+                      <div
+                        className="absolute bottom-0 rounded-t"
+                        style={{
+                          left: 0,
+                          width: COLUMN_WIDTH,
+                          height: backH,
+                          background: "var(--series-blue)",
+                          opacity: 0.28,
+                        }}
+                      />
+                      {frontH > 0 && (
+                        <div
+                          className={`absolute bottom-0 transition-opacity ${capH === 0 ? "rounded-t" : ""}`}
+                          style={{
+                            left: (COLUMN_WIDTH - FRONT_WIDTH) / 2,
+                            width: FRONT_WIDTH,
+                            height: frontH,
+                            background: "var(--series-blue)",
+                            opacity: isHovered ? 0.85 : 1,
+                          }}
+                        />
+                      )}
+                      {capH > 0 && (
+                        <div
+                          className="absolute rounded-t transition-opacity"
+                          style={{
+                            left: (COLUMN_WIDTH - FRONT_WIDTH) / 2,
+                            width: FRONT_WIDTH,
+                            bottom: capBottom,
+                            height: capH,
+                            background: "var(--series-red)",
+                            opacity: isHovered ? 0.85 : 1,
+                          }}
+                        />
+                      )}
+                    </div>
+
+                    {/* Date axis label */}
+                    <div
+                      className="text-center text-[10px] whitespace-nowrap tabular-nums"
+                      style={{
+                        height: AXIS_LABEL_HEIGHT,
+                        color: isHovered ? "var(--series-blue)" : "var(--text-muted)",
+                      }}
+                    >
+                      {i % labelStride === 0 ? formatAxisLabel(col.date) : ""}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
