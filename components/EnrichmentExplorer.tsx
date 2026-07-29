@@ -3,18 +3,33 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   type ColumnDef,
+  type RowSelectionState,
   type SortingState,
+  type VisibilityState,
   flexRender,
   getCoreRowModel,
   getFilteredRowModel,
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { getEnrichmentRunSnapshot } from "@/app/(dashboard)/enrichment/actions";
+import { getEnrichmentRunSnapshot, triggerEnrichmentStage } from "@/app/(dashboard)/enrichment/actions";
 import type { EnrichmentRowItem, EnrichmentRunListItem } from "@/lib/queries";
+import { ALL_STAGES, STAGE_LABELS, type Stage } from "@/lib/enrichment/stages";
 
 const RUNNING_STATUSES = new Set(["queued", "running"]);
 const POLL_INTERVAL_MS = 2500;
+const RETRIABLE_STATUSES = new Set(["pending", "no_match", "error", "rejected"]);
+
+const SOURCE_COLUMN_IDS = ["name", "companyName", "domain"];
+const ENRICHMENT_COLUMN_IDS = [
+  "email",
+  "emailStatus",
+  "emailSource",
+  "mobile",
+  "mobileStatus",
+  "mobileSource",
+  "creditsConsumed",
+];
 
 const inputStyle = { borderColor: "var(--border-hairline)", color: "var(--text-primary)" };
 
@@ -91,10 +106,14 @@ export function EnrichmentExplorer({
   const [rows, setRows] = useState(initialRows);
   const [search, setSearch] = useState("");
   const [sorting, setSorting] = useState<SortingState>([]);
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
+  const [isTriggering, setIsTriggering] = useState(false);
 
   useEffect(() => {
     setRun(initialRun);
     setRows(initialRows);
+    setRowSelection({});
   }, [runId, initialRun, initialRows]);
 
   useEffect(() => {
@@ -110,56 +129,89 @@ export function EnrichmentExplorer({
   const columns = useMemo<ColumnDef<EnrichmentRowItem>[]>(
     () => [
       {
-        id: "name",
-        header: "Name",
-        accessorFn: (r) => [r.firstName, r.lastName].filter(Boolean).join(" ") || "(no name)",
+        id: "select",
+        header: ({ table }) => (
+          <input
+            type="checkbox"
+            checked={table.getIsAllRowsSelected()}
+            onChange={table.getToggleAllRowsSelectedHandler()}
+          />
+        ),
+        cell: ({ row }) => (
+          <input type="checkbox" checked={row.getIsSelected()} onChange={row.getToggleSelectedHandler()} />
+        ),
+        enableSorting: false,
+        size: 32,
       },
       {
-        id: "companyName",
-        header: "Company",
-        accessorKey: "companyName",
-        cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+        id: "source",
+        header: "Source Data",
+        columns: [
+          {
+            id: "name",
+            header: "Name",
+            accessorFn: (r) => [r.firstName, r.lastName].filter(Boolean).join(" ") || "(no name)",
+          },
+          {
+            id: "companyName",
+            header: "Company",
+            accessorKey: "companyName",
+            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+          },
+          {
+            id: "domain",
+            header: "Domain",
+            accessorKey: "domain",
+            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+          },
+        ],
       },
       {
-        id: "email",
-        header: "Email",
-        accessorKey: "email",
-        cell: (ctx) => ctx.getValue<string | null>() ?? "—",
-      },
-      {
-        id: "emailStatus",
-        header: "Email Status",
-        accessorKey: "emailStatus",
-        cell: (ctx) => <StatusBadge status={ctx.getValue<string>()} />,
-      },
-      {
-        id: "emailSource",
-        header: "Email Source",
-        accessorKey: "emailSource",
-        cell: (ctx) => ctx.getValue<string | null>() ?? "—",
-      },
-      {
-        id: "mobile",
-        header: "Mobile",
-        accessorKey: "mobile",
-        cell: (ctx) => ctx.getValue<string | null>() ?? "—",
-      },
-      {
-        id: "mobileStatus",
-        header: "Mobile Status",
-        accessorKey: "mobileStatus",
-        cell: (ctx) => <StatusBadge status={ctx.getValue<string>()} />,
-      },
-      {
-        id: "mobileSource",
-        header: "Mobile Source",
-        accessorKey: "mobileSource",
-        cell: (ctx) => ctx.getValue<string | null>() ?? "—",
-      },
-      {
-        id: "creditsConsumed",
-        header: "Credits",
-        accessorKey: "creditsConsumed",
+        id: "enrichment",
+        header: "Enrichment",
+        columns: [
+          {
+            id: "email",
+            header: "Email",
+            accessorKey: "email",
+            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+          },
+          {
+            id: "emailStatus",
+            header: "Email Status",
+            accessorKey: "emailStatus",
+            cell: (ctx) => <StatusBadge status={ctx.getValue<string>()} />,
+          },
+          {
+            id: "emailSource",
+            header: "Email Source",
+            accessorKey: "emailSource",
+            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+          },
+          {
+            id: "mobile",
+            header: "Mobile",
+            accessorKey: "mobile",
+            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+          },
+          {
+            id: "mobileStatus",
+            header: "Mobile Status",
+            accessorKey: "mobileStatus",
+            cell: (ctx) => <StatusBadge status={ctx.getValue<string>()} />,
+          },
+          {
+            id: "mobileSource",
+            header: "Mobile Source",
+            accessorKey: "mobileSource",
+            cell: (ctx) => ctx.getValue<string | null>() ?? "—",
+          },
+          {
+            id: "creditsConsumed",
+            header: "Credits",
+            accessorKey: "creditsConsumed",
+          },
+        ],
       },
     ],
     [],
@@ -168,7 +220,11 @@ export function EnrichmentExplorer({
   const table = useReactTable({
     data: rows,
     columns,
-    state: { sorting, globalFilter: search },
+    state: { sorting, globalFilter: search, rowSelection, columnVisibility },
+    getRowId: (row) => String(row.id),
+    enableRowSelection: true,
+    onRowSelectionChange: setRowSelection,
+    onColumnVisibilityChange: setColumnVisibility,
     onSortingChange: setSorting,
     onGlobalFilterChange: setSearch,
     getCoreRowModel: getCoreRowModel(),
@@ -183,6 +239,40 @@ export function EnrichmentExplorer({
     },
   });
 
+  function toggleGroup(ids: string[]) {
+    const anyVisible = ids.some((id) => table.getColumn(id)?.getIsVisible() ?? true);
+    for (const id of ids) table.getColumn(id)?.toggleVisibility(!anyVisible);
+  }
+
+  const selectedRowIds = Object.entries(rowSelection)
+    .filter(([, selected]) => selected)
+    .map(([id]) => Number(id));
+
+  async function handleTriggerStage(stages: Stage[] | undefined) {
+    setIsTriggering(true);
+    try {
+      const rowIds = selectedRowIds.length > 0 ? selectedRowIds : undefined;
+      await triggerEnrichmentStage(runId, stages, rowIds);
+      const snapshot = await getEnrichmentRunSnapshot(runId);
+      setRun(snapshot.run);
+      setRows(snapshot.rows);
+      setRowSelection({});
+    } finally {
+      setIsTriggering(false);
+    }
+  }
+
+  const isBusy = isTriggering || (run ? RUNNING_STATUSES.has(run.status) : false);
+  const emailRetriableCount = rows.filter((r) => RETRIABLE_STATUSES.has(r.emailStatus)).length;
+  const mobileRetriableCount = rows.filter((r) => RETRIABLE_STATUSES.has(r.mobileStatus)).length;
+
+  function stageDisabled(stage: Stage): boolean {
+    if (isBusy) return true;
+    if (selectedRowIds.length > 0) return false;
+    const isMobileStage = stage === "leadmagic_mobile" || stage === "prospeo_mobile";
+    return isMobileStage ? mobileRetriableCount === 0 : emailRetriableCount === 0;
+  }
+
   const foundEmail = rows.filter((r) => r.emailStatus === "found").length;
   const foundMobile = rows.filter((r) => r.mobileStatus === "found").length;
   const totalCredits = rows.reduce((sum, r) => sum + r.creditsConsumed, 0);
@@ -192,6 +282,34 @@ export function EnrichmentExplorer({
   return (
     <div className="space-y-4">
       <RunProgress run={run} />
+
+      <div className="hud-panel space-y-2 p-4">
+        <p className="hud-heading text-xs" style={{ color: "var(--text-secondary)" }}>
+          Run a stage {selectedRowIds.length > 0 ? `on ${selectedRowIds.length} selected row(s)` : "on all eligible rows"}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {ALL_STAGES.map((stage) => (
+            <button
+              key={stage}
+              type="button"
+              disabled={stageDisabled(stage)}
+              onClick={() => handleTriggerStage([stage])}
+              className="hud-button rounded px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {STAGE_LABELS[stage]}
+            </button>
+          ))}
+          <button
+            type="button"
+            disabled={isBusy}
+            onClick={() => handleTriggerStage(undefined)}
+            className="hud-button rounded px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-40"
+            style={{ borderColor: "var(--series-blue)" }}
+          >
+            Run All (full waterfall)
+          </button>
+        </div>
+      </div>
 
       <div className="hud-panel space-y-3 p-4">
         <div className="flex flex-wrap items-center gap-3">
@@ -203,6 +321,22 @@ export function EnrichmentExplorer({
             className="w-72 rounded border bg-transparent px-3 py-1.5 text-sm outline-none focus:border-blue-500"
             style={inputStyle}
           />
+          <button
+            type="button"
+            onClick={() => toggleGroup(SOURCE_COLUMN_IDS)}
+            className="cursor-pointer rounded-full border px-3 py-1 text-xs transition"
+            style={{ borderColor: "var(--border-hairline)", color: "var(--text-secondary)" }}
+          >
+            Toggle Source columns
+          </button>
+          <button
+            type="button"
+            onClick={() => toggleGroup(ENRICHMENT_COLUMN_IDS)}
+            className="cursor-pointer rounded-full border px-3 py-1 text-xs transition"
+            style={{ borderColor: "var(--border-hairline)", color: "var(--text-secondary)" }}
+          >
+            Toggle Enrichment columns
+          </button>
           <p className="text-xs" style={{ color: "var(--text-muted)" }}>
             {rows.length} contacts — {foundEmail} emails found, {foundMobile} mobiles found, {totalCredits} credits
             used
@@ -220,30 +354,49 @@ export function EnrichmentExplorer({
                   className="hud-heading border-b text-xs"
                   style={{ borderColor: "var(--border-hairline)" }}
                 >
-                  {headerGroup.headers.map((header) => (
-                    <th key={header.id} className="px-4 py-3 font-medium">
-                      <button
-                        type="button"
-                        onClick={header.column.getToggleSortingHandler()}
-                        className="flex cursor-pointer items-center gap-1"
-                        style={{
-                          color: header.column.getIsSorted() ? "var(--text-primary)" : "var(--text-secondary)",
-                        }}
-                      >
-                        {flexRender(header.column.columnDef.header, header.getContext())}
-                        <span style={{ opacity: header.column.getIsSorted() ? 1 : 0.3 }}>
-                          {header.column.getIsSorted() === "desc" ? "▼" : "▲"}
-                        </span>
-                      </button>
-                    </th>
-                  ))}
+                  {headerGroup.headers.map((header) => {
+                    if (header.isPlaceholder) return <th key={header.id} colSpan={header.colSpan} rowSpan={header.rowSpan} />;
+                    if (!header.column.getCanSort()) {
+                      return (
+                        <th
+                          key={header.id}
+                          colSpan={header.colSpan}
+                          rowSpan={header.rowSpan}
+                          className="px-4 py-3 text-center font-medium"
+                        >
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                        </th>
+                      );
+                    }
+                    return (
+                      <th key={header.id} colSpan={header.colSpan} rowSpan={header.rowSpan} className="px-4 py-3 font-medium">
+                        <button
+                          type="button"
+                          onClick={header.column.getToggleSortingHandler()}
+                          className="flex cursor-pointer items-center gap-1"
+                          style={{
+                            color: header.column.getIsSorted() ? "var(--text-primary)" : "var(--text-secondary)",
+                          }}
+                        >
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                          <span style={{ opacity: header.column.getIsSorted() ? 1 : 0.3 }}>
+                            {header.column.getIsSorted() === "desc" ? "▼" : "▲"}
+                          </span>
+                        </button>
+                      </th>
+                    );
+                  })}
                 </tr>
               ))}
             </thead>
             <tbody>
               {table.getRowModel().rows.length === 0 && (
                 <tr>
-                  <td colSpan={columns.length} className="px-4 py-6 text-center" style={{ color: "var(--text-muted)" }}>
+                  <td
+                    colSpan={table.getVisibleLeafColumns().length}
+                    className="px-4 py-6 text-center"
+                    style={{ color: "var(--text-muted)" }}
+                  >
                     No contacts match this search.
                   </td>
                 </tr>
@@ -252,7 +405,7 @@ export function EnrichmentExplorer({
                 <tr
                   key={row.id}
                   className="border-t"
-                  style={{ borderColor: "var(--gridline)" }}
+                  style={{ borderColor: "var(--gridline)", background: row.getIsSelected() ? "rgba(255,255,255,0.05)" : undefined }}
                 >
                   {row.getVisibleCells().map((cell) => (
                     <td key={cell.id} className="px-4 py-3" style={{ color: "var(--text-secondary)" }}>

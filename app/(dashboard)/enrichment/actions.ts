@@ -2,12 +2,13 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { campaigns, companies, contacts, enrichmentRows, enrichmentRuns } from "@/lib/db/schema";
 import { batchReadObjects } from "@/lib/hubspot";
 import { inngest } from "@/lib/inngest/client";
 import { getEnrichmentRun, getEnrichmentRows } from "@/lib/queries";
+import { EMAIL_STAGES, MOBILE_STAGES, type Stage } from "@/lib/enrichment/stages";
 
 function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -88,6 +89,42 @@ export async function triggerEnrichmentRun(formData: FormData) {
 
   revalidatePath("/enrichment");
   redirect(`/enrichment?run=${run.id}`);
+}
+
+// Fired by the per-stage trigger bar in EnrichmentExplorer — re-runs one or
+// more specific waterfall stages against either the checked rows or (if
+// nothing's checked) every row in the run still needing that field.
+// Un-resolves rows first (no_match/error/rejected -> pending, scoped to
+// exactly the field(s) the requested stages touch) so the Inngest function's
+// own "only work pending rows" query picks them back up — rows that already
+// have a clean `found` result are left untouched, never overwritten by a
+// manual retry of an earlier stage.
+export async function triggerEnrichmentStage(runId: number, stages?: Stage[], rowIds?: number[]) {
+  const touchesEmail = !stages || stages.some((s) => EMAIL_STAGES.includes(s));
+  const touchesMobile = !stages || stages.some((s) => MOBILE_STAGES.includes(s));
+  const rowScope = rowIds && rowIds.length > 0 ? inArray(enrichmentRows.id, rowIds) : undefined;
+
+  if (touchesEmail) {
+    await db
+      .update(enrichmentRows)
+      .set({ emailStatus: "pending", updatedAt: new Date() })
+      .where(and(eq(enrichmentRows.runId, runId), inArray(enrichmentRows.emailStatus, ["no_match", "error", "rejected"]), rowScope));
+  }
+  if (touchesMobile) {
+    await db
+      .update(enrichmentRows)
+      .set({ mobileStatus: "pending", updatedAt: new Date() })
+      .where(and(eq(enrichmentRows.runId, runId), inArray(enrichmentRows.mobileStatus, ["no_match", "error", "rejected"]), rowScope));
+  }
+
+  await db
+    .update(enrichmentRuns)
+    .set({ status: "queued", errorMessage: null, finishedAt: null })
+    .where(eq(enrichmentRuns.id, runId));
+
+  await inngest.send({ name: "enrichment/run.requested", data: { runId, stages, rowIds } });
+
+  revalidatePath("/enrichment");
 }
 
 // Polled from the client every few seconds while a run is queued/running —

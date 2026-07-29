@@ -221,6 +221,14 @@ export const enrichmentRows = pgTable("enrichment_rows", {
   mobileStatus: text("mobile_status").notNull().default("pending"), // pending | found | no_match | rejected | error | skipped
   mobile: text("mobile"),
   mobileSource: text("mobile_source"), // leadmagic | prospeo
+  // Tracks writing a newly-found mobile back to HubSpot's direct_phone
+  // property — separate from mobileStatus because "found" just means our
+  // waterfall resolved it; this tracks whether it's actually been pushed to
+  // the live CRM yet, gated on a manual confirm (see pushDirectPhoneToHubspot
+  // in app/(dashboard)/enrichment/actions.ts) since this is the app's first
+  // write path into HubSpot.
+  directPhonePushStatus: text("direct_phone_push_status").notNull().default("not_pushed"), // not_pushed | pushed | skipped_duplicate | error
+  directPhonePushedAt: timestamp("direct_phone_pushed_at"),
   creditsConsumed: integer("credits_consumed").notNull().default(0),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
