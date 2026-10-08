@@ -138,6 +138,7 @@ type DealProps = {
   sql_accepted_date?: string;
   bant_qualified?: string;
   source_group?: string;
+  source?: string;
   intro_meeting_status?: string;
 };
 
@@ -145,7 +146,20 @@ type MeetingProps = {
   hs_timestamp?: string;
   hs_createdate?: string;
   hs_meeting_outcome?: string;
+  hs_meeting_title?: string;
 };
+
+const OVERVIEW_TITLE = /overview/i;
+
+// Source Group is filled by a HubSpot workflow (seen as AUTOMATION_PLATFORM
+// in its history); if it's ever blank, ZoomInfo / 6Sense sourced deals are
+// BDR by definition (per the user) — anything else stays unclassified and is
+// left off the Team page.
+const BDR_SOURCES = new Set(["ZoomInfo", "6Sense"]);
+function effectiveSourceGroup(p: { source_group?: string; source?: string }): string | null {
+  if (p.source_group) return p.source_group;
+  return p.source && BDR_SOURCES.has(p.source) ? "BDR" : null;
+}
 
 export type MeetingStatus =
   | "held"
@@ -217,6 +231,7 @@ export async function syncTeamDeals(sinceDay: string) {
       "sql_accepted_date",
       "bant_qualified",
       "source_group",
+      "source",
       "intro_meeting_status",
     ],
     ["hubspot_owner_id", "pipeline", "dealstage", "intro_meeting_status"],
@@ -314,12 +329,23 @@ export async function syncTeamDeals(sinceDay: string) {
     const movedToSales = firstEntry("pipeline", (v) => v === SALES_PIPELINE_ID);
     const sqlDate =
       p.sql_accepted_date?.slice(0, 10) ?? (movedToSales ? toTorontoDateStr(Date.parse(movedToSales.timestamp)) : null);
+    // MQL (per the user): reached Pre-Assessment (or later), OR a System /
+    // General Overview meeting got scheduled — whichever happened first.
+    // Overview meetings are recognised by title ("… Sage Intacct General
+    // Overview", "System Overview - …"); canceled ones don't count.
     const enteredMql = firstEntry("dealstage", (v) => MQL_STAGES.has(v));
-    const mqlDate = enteredMql
-      ? toTorontoDateStr(Date.parse(enteredMql.timestamp))
+    const stageMqlMs = enteredMql
+      ? Date.parse(enteredMql.timestamp)
       : MQL_STAGES.has(p.dealstage ?? "")
-        ? toTorontoDateStr(createdMs)
+        ? createdMs
         : null;
+    const overviewMs = candidates
+      .filter((m) => OVERVIEW_TITLE.test(m.hs_meeting_title ?? "") && m.hs_meeting_outcome !== "CANCELED")
+      .map((m) => Date.parse(m.hs_createdate ?? m.hs_timestamp ?? ""))
+      .filter((ms) => !Number.isNaN(ms))
+      .sort((a, b) => a - b)[0];
+    const mqlMs = [stageMqlMs, overviewMs ?? null].filter((v): v is number => v != null).sort((a, b) => a - b)[0];
+    const mqlDate = mqlMs != null ? toTorontoDateStr(mqlMs) : null;
 
     // Status: a final Intro Meeting Status set in HubSpot wins; otherwise
     // infer from the meeting records. "Scheduled" set by hand only overrides
@@ -366,7 +392,7 @@ export async function syncTeamDeals(sinceDay: string) {
       statusSource,
       statusSince: statusSinceMs ? new Date(statusSinceMs) : null,
       rebooked,
-      sourceGroup: p.source_group ?? null,
+      sourceGroup: effectiveSourceGroup(p),
       mqlDate,
       sqlDate,
       bant: p.bant_qualified === "true",

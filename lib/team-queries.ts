@@ -8,7 +8,8 @@ import { asc, sql } from "drizzle-orm";
 // - Conversations: Pitch / Past Pitch / Meeting dispositions only.
 // - Meetings booked: BDR-sourced Marketing-Pipeline deals they created, by
 //   creation date. Deals whose Source Group is Marketing / Sage / Sales Team
-//   are excluded entirely (inbound leads aren't BDR output); blank counts as BDR.
+//   are excluded entirely (inbound leads aren't BDR output). A blank Source Group
+//   falls back to Source = ZoomInfo / 6Sense => BDR at sync time.
 //   Held / rebook / lost / BANT are about THOSE bookings (booking-month
 //   cohort), so a month's show rate is "of what was booked that month".
 // - Status comes from the deal's Intro Meeting Status when set, else is
@@ -16,11 +17,12 @@ import { asc, sql } from "drizzle-orm";
 // - Show rate: held / (held + needs rebook + no-show lost + cancelled lost) —
 //   i.e. of meetings with a known result. A meeting rebooked and then held
 //   counts as held. Scheduled / outcome-missing / no-meeting are excluded.
-// - MQL: deal reached Pre-Assessment (or later), by the day it got there.
+// - MQL: deal reached Pre-Assessment (or later) OR an Overview meeting was
+//   scheduled — whichever came first.
 // - SQL: SQL Accepted Date, else the day it moved to the Sales Pipeline.
 // Both credited to whoever booked the deal.
 
-export const BDR_SOURCED = sql.raw(`(d.source_group is null or d.source_group = 'BDR')`);
+export const BDR_SOURCED = sql.raw(`d.source_group = 'BDR'`);
 
 export type TeamStatRow = {
   ownerId: string;

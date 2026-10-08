@@ -16,7 +16,7 @@ async function main() {
   const rows = await db.execute<{ id: string; deal_name: string }>(sql`
     select hubspot_deal_id id, deal_name from team_deals
     where created_at >= ${from}::date
-      and (source_group is null or source_group = 'BDR')
+      and source_group = 'BDR'
       and meeting_status = 'held' and status_source = 'auto'
     order by created_at`);
   for (const r of rows) console.log(`  ${r.id}  ${r.deal_name}`);

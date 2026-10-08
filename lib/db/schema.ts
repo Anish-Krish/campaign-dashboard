@@ -324,8 +324,9 @@ export const teamDeals = pgTable("team_deals", {
   statusSource: text("status_source").notNull().default("auto"),
   statusSince: timestamp("status_since"), // when it went needs_rebook / lost — powers "days waiting"
   rebooked: boolean("rebooked").notNull().default(false),
-  // Deal "Source Group": BDR | Marketing | Sage | Sales Team. Only BDR (or
-  // blank) counts on the Team page — marketing leads are kept fully separate.
+  // Deal "Source Group" (BDR | Marketing | Sage | Sales Team, set by a HubSpot
+  // workflow; blank + Source ZoomInfo/6Sense => BDR). Only BDR counts on the
+  // Team page — marketing leads are kept fully separate.
   sourceGroup: text("source_group"),
   mqlDate: date("mql_date"),
   sqlDate: date("sql_date"),
