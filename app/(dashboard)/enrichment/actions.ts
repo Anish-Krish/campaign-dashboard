@@ -1,5 +1,6 @@
 "use server";
 
+import { requireAdmin } from "@/lib/session";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { parse } from "csv-parse/sync";
@@ -67,6 +68,7 @@ async function insertRows(runId: number, rows: NewEnrichmentRow[]) {
 // it's fetched live here — LeadMagic/Prospeo match far better against a
 // domain than a bare company name).
 export async function triggerEnrichmentRun(formData: FormData) {
+  await requireAdmin();
   const campaignId = Number(formData.get("campaignId"));
   const authorityOnly = formData.get("authorityOnly") === "on";
   if (!campaignId) return;
@@ -174,6 +176,7 @@ export async function parseEnrichmentCsv(formData: FormData): Promise<{
   rows: Record<string, string>[];
   detectedMapping: Record<keyof typeof COLUMN_ALIASES, string | null>;
 }> {
+  await requireAdmin();
   const file = formData.get("file");
   if (!(file instanceof File)) throw new Error("No file uploaded");
 
@@ -221,6 +224,7 @@ export async function triggerEnrichmentRunFromRows(
   },
   label: string,
 ) {
+  await requireAdmin();
   if (rows.length === 0) return;
 
   const [run] = await db
@@ -278,6 +282,7 @@ export async function triggerEnrichmentRunFromRows(
 // have a clean `found` result are left untouched, never overwritten by a
 // manual retry of an earlier stage.
 export async function triggerEnrichmentStage(runId: number, stages?: Stage[], rowIds?: number[]) {
+  await requireAdmin();
   const touchesEmail = !stages || stages.some((s) => EMAIL_STAGES.includes(s));
   const touchesMobile = !stages || stages.some((s) => MOBILE_STAGES.includes(s));
   const rowScope = rowIds && rowIds.length > 0 ? inArray(enrichmentRows.id, rowIds) : undefined;
@@ -326,6 +331,7 @@ function normalizePhoneDigits(raw: string | null | undefined): string | null {
 // earlier by hand. Scoped to selected rows if given, otherwise every
 // eligible row in the run.
 export async function pushDirectPhoneToHubspot(runId: number, rowIds?: number[]) {
+  await requireAdmin();
   const eligible = await db
     .select()
     .from(enrichmentRows)
@@ -391,6 +397,7 @@ export async function pushDirectPhoneToHubspot(runId: number, rowIds?: number[])
 // Polled from the client every few seconds while a run is queued/running —
 // see components/EnrichmentExplorer.tsx.
 export async function getEnrichmentRunSnapshot(runId: number) {
+  await requireAdmin();
   const [run, rows] = await Promise.all([getEnrichmentRun(runId), getEnrichmentRows(runId)]);
   return { run, rows };
 }

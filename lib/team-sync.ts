@@ -135,7 +135,6 @@ type DealProps = {
   dealstage?: string;
   createdate?: string;
   hubspot_owner_id?: string;
-  sql_accepted_date?: string;
   bant_qualified?: string;
   source_group?: string;
   source?: string;
@@ -148,8 +147,6 @@ type MeetingProps = {
   hs_meeting_outcome?: string;
   hs_meeting_title?: string;
 };
-
-const OVERVIEW_TITLE = /overview/i;
 
 // Source Group is filled by a HubSpot workflow (seen as AUTOMATION_PLATFORM
 // in its history); if it's ever blank, ZoomInfo / 6Sense sourced deals are
@@ -210,13 +207,24 @@ function earliestValue(history: Array<{ value: string; timestamp: string }> | un
 }
 
 export async function syncTeamDeals(sinceDay: string) {
-  const { overflow, results: found } = await searchAll<DealProps>(
-    "deals",
-    [{ propertyName: "createdate", operator: "GTE", value: String(torontoMidnightUtcMs(sinceDay)) }],
-    ["dealname"],
-  );
-  if (overflow) throw new Error(`team deal sync: more than 10k deals since ${sinceDay}`);
-  const dealIds = found.map((d) => d.id);
+  // Deals created in the window, plus OLDER deals touched in the window that
+  // are now at MQL/SQL — MQL/SQL count in the month the stage was entered, so
+  // a 2024 booking that became an SQL this month must still be picked up.
+  const sinceMs = String(torontoMidnightUtcMs(sinceDay));
+  const searches = await Promise.all([
+    searchAll<DealProps>("deals", [{ propertyName: "createdate", operator: "GTE", value: sinceMs }], ["dealname"]),
+    searchAll<DealProps>(
+      "deals",
+      [
+        { propertyName: "createdate", operator: "LT", value: sinceMs },
+        { propertyName: "hs_lastmodifieddate", operator: "GTE", value: sinceMs },
+        { propertyName: "dealstage", operator: "IN", values: [...MQL_STAGES] },
+      ],
+      ["dealname"],
+    ),
+  ]);
+  if (searches.some((r) => r.overflow)) throw new Error(`team deal sync: more than 10k deals since ${sinceDay}`);
+  const dealIds = [...new Set(searches.flatMap((r) => r.results.map((d) => d.id)))];
   if (dealIds.length === 0) return { deals: 0 };
 
   const deals = await batchReadObjectsWithHistory<DealProps>(
@@ -228,7 +236,6 @@ export async function syncTeamDeals(sinceDay: string) {
       "dealstage",
       "createdate",
       "hubspot_owner_id",
-      "sql_accepted_date",
       "bant_qualified",
       "source_group",
       "source",
@@ -324,27 +331,20 @@ export async function syncTeamDeals(sinceDay: string) {
         .filter((h) => match(h.value))
         .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))[0];
 
-    // SQL: the explicit "SQL Accepted Date" when set, else the day the deal
-    // first moved into the Sales Pipeline (that move IS the SQL hand-off here).
+    // Stage-based, per the user — counted in the month the deal ENTERED the
+    // stage, however old the deal is:
+    //  - SQL = first moved into the Sales Pipeline.
+    //  - MQL = first entered Pre-Assessment / System Overview; a deal that
+    //    skipped straight to the Sales Pipeline became an MQL on that same day.
     const movedToSales = firstEntry("pipeline", (v) => v === SALES_PIPELINE_ID);
-    const sqlDate =
-      p.sql_accepted_date?.slice(0, 10) ?? (movedToSales ? toTorontoDateStr(Date.parse(movedToSales.timestamp)) : null);
-    // MQL (per the user): reached Pre-Assessment (or later), OR a System /
-    // General Overview meeting got scheduled — whichever happened first.
-    // Overview meetings are recognised by title ("… Sage Intacct General
-    // Overview", "System Overview - …"); canceled ones don't count.
-    const enteredMql = firstEntry("dealstage", (v) => MQL_STAGES.has(v));
-    const stageMqlMs = enteredMql
-      ? Date.parse(enteredMql.timestamp)
-      : MQL_STAGES.has(p.dealstage ?? "")
+    const sqlMs = movedToSales
+      ? Date.parse(movedToSales.timestamp)
+      : p.pipeline === SALES_PIPELINE_ID
         ? createdMs
         : null;
-    const overviewMs = candidates
-      .filter((m) => OVERVIEW_TITLE.test(m.hs_meeting_title ?? "") && m.hs_meeting_outcome !== "CANCELED")
-      .map((m) => Date.parse(m.hs_createdate ?? m.hs_timestamp ?? ""))
-      .filter((ms) => !Number.isNaN(ms))
-      .sort((a, b) => a - b)[0];
-    const mqlMs = [stageMqlMs, overviewMs ?? null].filter((v): v is number => v != null).sort((a, b) => a - b)[0];
+    const enteredMql = firstEntry("dealstage", (v) => MQL_STAGES.has(v));
+    const mqlMs = enteredMql ? Date.parse(enteredMql.timestamp) : MQL_STAGES.has(p.dealstage ?? "") ? createdMs : sqlMs;
+    const sqlDate = sqlMs != null ? toTorontoDateStr(sqlMs) : null;
     const mqlDate = mqlMs != null ? toTorontoDateStr(mqlMs) : null;
 
     // Status: a final Intro Meeting Status set in HubSpot wins; otherwise
@@ -393,6 +393,8 @@ export async function syncTeamDeals(sinceDay: string) {
       statusSince: statusSinceMs ? new Date(statusSinceMs) : null,
       rebooked,
       sourceGroup: effectiveSourceGroup(p),
+      contactIds: dealToContacts.get(d.id) ?? [],
+      companyIds: [...new Set(dealToCompanies.get(d.id) ?? [])],
       mqlDate,
       sqlDate,
       bant: p.bant_qualified === "true",
@@ -421,6 +423,8 @@ export async function syncTeamDeals(sinceDay: string) {
           statusSince: sql`excluded.status_since`,
           rebooked: sql`excluded.rebooked`,
           sourceGroup: sql`excluded.source_group`,
+          contactIds: sql`excluded.contact_ids`,
+          companyIds: sql`excluded.company_ids`,
           mqlDate: sql`excluded.mql_date`,
           sqlDate: sql`excluded.sql_date`,
           bant: sql`excluded.bant`,

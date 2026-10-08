@@ -1,8 +1,14 @@
 import { getAuthorityKeywords } from "@/lib/authority";
 import { getCampaignsWithCounts } from "@/lib/queries";
 import { getOwnersNotOnTeam, getTeamGroups, getTeamMembers } from "@/lib/team-queries";
+import { asc } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { owners, users } from "@/lib/db/schema";
+import { requireAdmin } from "@/lib/session";
 import {
   addTeamMember,
+  createUser,
+  updateUser,
   createCampaign,
   deleteCampaign,
   removeTeamMember,
@@ -20,17 +26,129 @@ const cardStyle = { background: "var(--chart-surface)", borderColor: "var(--bord
 const labelStyle = { color: "var(--text-secondary)" };
 
 export default async function SettingsPage() {
-  const [campaigns, keywords, team, groups, availableOwners] = await Promise.all([
+  const me = await requireAdmin();
+  const [campaigns, keywords, team, groups, availableOwners, userRows, allOwners] = await Promise.all([
     getCampaignsWithCounts(),
     getAuthorityKeywords(),
     getTeamMembers(),
     getTeamGroups(),
     getOwnersNotOnTeam(),
+    db.select().from(users).orderBy(asc(users.name)),
+    db.select().from(owners).orderBy(asc(owners.name)),
   ]);
 
   return (
     <div className="space-y-10">
       <h1 className="text-2xl font-semibold">Settings</h1>
+
+      <section className="rounded-lg border p-5" style={cardStyle}>
+        <h2 className="mb-2 text-lg font-medium">Logins</h2>
+        <p className="mb-4 text-sm" style={{ color: "var(--text-muted)" }}>
+          One login per person. BDRs see the Team page and register their own segments (link them to their HubSpot user so
+          their registrations are attributed to them). Admins see everything. Leave the password blank to keep it.
+        </p>
+        <div className="mb-6 space-y-3">
+          {userRows.map((u) => (
+            <form
+              key={u.id}
+              action={updateUser}
+              className="grid grid-cols-2 items-end gap-3 rounded border p-3 sm:grid-cols-6"
+              style={{ borderColor: "var(--gridline)" }}
+            >
+              <input type="hidden" name="id" value={u.id} />
+              <div>
+                <label className="mb-1 block text-xs" style={labelStyle}>
+                  Name <span style={{ color: "var(--text-muted)" }}>({u.username})</span>
+                </label>
+                <input name="name" defaultValue={u.name} className={inputClass} style={inputStyle} />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs" style={labelStyle}>
+                  Role
+                </label>
+                <select name="role" defaultValue={u.role} className={inputClass} style={inputStyle}>
+                  <option value="bdr">BDR</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+              <div className="col-span-2">
+                <label className="mb-1 block text-xs" style={labelStyle}>
+                  HubSpot user
+                </label>
+                <select name="hubspotOwnerId" defaultValue={u.hubspotOwnerId ?? ""} className={inputClass} style={inputStyle}>
+                  <option value="">— none —</option>
+                  {allOwners.map((o) => (
+                    <option key={o.hubspotOwnerId} value={o.hubspotOwnerId}>
+                      {o.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs" style={labelStyle}>
+                  New password
+                </label>
+                <input name="password" type="password" autoComplete="new-password" className={inputClass} style={inputStyle} />
+              </div>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-1 text-xs" style={labelStyle}>
+                  <input type="checkbox" name="active" defaultChecked={u.active} disabled={u.id === me.id} /> Active
+                </label>
+                <button type="submit" className="rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500">
+                  Save
+                </button>
+              </div>
+            </form>
+          ))}
+        </div>
+        <form action={createUser} className="grid grid-cols-2 items-end gap-3 sm:grid-cols-6">
+          <div>
+            <label className="mb-1 block text-xs" style={labelStyle}>
+              Username
+            </label>
+            <input name="username" required className={inputClass} style={inputStyle} />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs" style={labelStyle}>
+              Name
+            </label>
+            <input name="name" required className={inputClass} style={inputStyle} />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs" style={labelStyle}>
+              Role
+            </label>
+            <select name="role" defaultValue="bdr" className={inputClass} style={inputStyle}>
+              <option value="bdr">BDR</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs" style={labelStyle}>
+              HubSpot user
+            </label>
+            <select name="hubspotOwnerId" defaultValue="" className={inputClass} style={inputStyle}>
+              <option value="">— none —</option>
+              {allOwners.map((o) => (
+                <option key={o.hubspotOwnerId} value={o.hubspotOwnerId}>
+                  {o.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs" style={labelStyle}>
+              Temp password
+            </label>
+            <input name="password" required className={inputClass} style={inputStyle} />
+          </div>
+          <div>
+            <button type="submit" className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500">
+              Create login
+            </button>
+          </div>
+        </form>
+      </section>
 
       <section className="rounded-lg border p-5" style={cardStyle}>
         <h2 className="mb-2 text-lg font-medium">Team</h2>

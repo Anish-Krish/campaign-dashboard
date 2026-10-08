@@ -15,7 +15,8 @@ const COLUMNS: Col[] = [
   { key: "connects", label: "Connects" },
   { key: "connectRate", label: "Connect %", format: (r) => `${r.connectRate}%` },
   { key: "conversations", label: "Convos", title: "Pitch / Past Pitch / Meeting dispositions" },
-  { key: "meetingsBooked", label: "Booked", title: "BDR-sourced meetings booked (marketing leads excluded)" },
+  { key: "activated", label: "Activated", title: "BDR created a deal but no meeting (Future Prospects)" },
+  { key: "meetingsBooked", label: "Meetings", title: "BDR-sourced meetings booked (marketing, Sage and referral leads excluded)" },
   { key: "bant", label: "BANT", title: "Bookings marked BANT Qualified on the deal" },
   { key: "held", label: "Held" },
   { key: "needsRebook", label: "Needs rebook", title: "No-show or cancel, prospect still alive" },
@@ -31,11 +32,10 @@ const COLUMNS: Col[] = [
   {
     key: "outcomeMissing",
     label: "Needs status",
-    title: "Meeting passed with no Intro Meeting Status, or no meeting in HubSpot — not counted in Show %",
-    format: (r) => String(r.outcomeMissing + r.noMeeting),
+    title: "Meeting passed with no Intro Meeting Status set — not counted in Show %",
   },
-  { key: "mqls", label: "MQL", title: "Reached Pre-Assessment (or later)" },
-  { key: "sqls", label: "SQL" },
+  { key: "mqls", label: "MQL", title: "Entered Pre-Assessment / System Overview in this period" },
+  { key: "sqls", label: "SQL", title: "Entered the Sales Pipeline in this period" },
 ];
 
 // Sortable leaderboard — doubles as the competition view when a trial-rep
@@ -105,7 +105,7 @@ export function TeamTable({
                     key={c.key}
                     className="px-3 py-3 text-right tabular-nums"
                     style={
-                      c.key === "outcomeMissing" && r.outcomeMissing + r.noMeeting > 0
+                      c.key === "outcomeMissing" && r.outcomeMissing > 0
                         ? { color: "var(--status-warning)" }
                         : { color: "var(--text-secondary)" }
                     }

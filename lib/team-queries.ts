@@ -6,8 +6,10 @@ import { asc, sql } from "drizzle-orm";
 // - Dials: every non-inbound call they logged.
 // - Connects: any "Connected…" disposition (incl. Wrong Title — a live pickup).
 // - Conversations: Pitch / Past Pitch / Meeting dispositions only.
-// - Meetings booked: BDR-sourced Marketing-Pipeline deals they created, by
-//   creation date. Deals whose Source Group is Marketing / Sage / Sales Team
+// - Meetings booked: BDR-sourced Marketing-Pipeline deals they created that
+//   have a meeting (record in HubSpot, or any Intro Meeting Status set), by
+//   creation date. Activated = the BDR created the deal but there's no
+//   meeting (Future Prospects) — per the user. Deals whose Source Group is Marketing / Sage / Sales Team
 //   are excluded entirely (inbound leads aren't BDR output). A blank Source Group
 //   falls back to Source = ZoomInfo / 6Sense => BDR at sync time.
 //   Held / rebook / lost / BANT are about THOSE bookings (booking-month
@@ -17,10 +19,18 @@ import { asc, sql } from "drizzle-orm";
 // - Show rate: held / (held + needs rebook + no-show lost + cancelled lost) —
 //   i.e. of meetings with a known result. A meeting rebooked and then held
 //   counts as held. Scheduled / outcome-missing / no-meeting are excluded.
-// - MQL: deal reached Pre-Assessment (or later) OR an Overview meeting was
-//   scheduled — whichever came first.
-// - SQL: SQL Accepted Date, else the day it moved to the Sales Pipeline.
+// - MQL: month the deal first entered Pre-Assessment / System Overview.
+// - SQL: month the deal first entered the Sales Pipeline.
 // Both credited to whoever booked the deal.
+
+// Pseudo-group: every team member, current and former — the MQL/SQL history view.
+export const ALL_BDRS = "All BDRs";
+
+function teamOwnersSql(group: string) {
+  return group === ALL_BDRS
+    ? sql`select hubspot_owner_id from team_members`
+    : sql`select hubspot_owner_id from team_members where team_group = ${group}`;
+}
 
 export const BDR_SOURCED = sql.raw(`d.source_group = 'BDR'`);
 
@@ -40,7 +50,7 @@ export type TeamStatRow = {
   cancelledLost: number;
   scheduled: number;
   outcomeMissing: number;
-  noMeeting: number;
+  activated: number;
   mqls: number;
   sqls: number;
   connectRate: number;
@@ -63,7 +73,7 @@ const ZERO = {
   cancelledLost: 0,
   scheduled: 0,
   outcomeMissing: 0,
-  noMeeting: 0,
+  activated: 0,
   mqls: 0,
   sqls: 0,
 };
@@ -115,7 +125,7 @@ async function aggregate(range: { startDate: string; endDate: string }, group: s
   const { startDate, endDate } = range;
 
   const rows = await db.execute<Record<string, string | number>>(sql`
-    with team as (select hubspot_owner_id from team_members where team_group = ${group}),
+    with team as (${teamOwnersSql(group)}),
     calls as (
       select c.owner_id, ${callBucket} as bucket,
         sum(c.calls) filter (where c.direction <> 'INBOUND') as dials,
@@ -129,7 +139,7 @@ async function aggregate(range: { startDate: string; endDate: string }, group: s
     ),
     booked as (
       select d.booked_by_owner_id as owner_id, ${dealBucket} as bucket,
-        count(*) as meetings_booked,
+        count(*) filter (where d.meeting_status <> 'no_meeting') as meetings_booked,
         count(*) filter (where d.bant) as bant,
         count(*) filter (where d.meeting_status = 'held') as held,
         count(*) filter (where d.meeting_status = 'needs_rebook') as needs_rebook,
@@ -138,7 +148,7 @@ async function aggregate(range: { startDate: string; endDate: string }, group: s
         count(*) filter (where d.meeting_status = 'cancelled_lost') as cancelled_lost,
         count(*) filter (where d.meeting_status = 'scheduled') as scheduled,
         count(*) filter (where d.meeting_status = 'not_logged') as outcome_missing,
-        count(*) filter (where d.meeting_status = 'no_meeting') as no_meeting
+        count(*) filter (where d.meeting_status = 'no_meeting') as activated
       from team_deals d
       where d.booked_by_owner_id in (select hubspot_owner_id from team) and ${BDR_SOURCED}
         and ${dealDay} between ${startDate} and ${endDate}
@@ -168,7 +178,7 @@ async function aggregate(range: { startDate: string; endDate: string }, group: s
       coalesce(b.needs_rebook, 0) needs_rebook, coalesce(b.rebooked, 0) rebooked,
       coalesce(b.no_show_lost, 0) no_show_lost, coalesce(b.cancelled_lost, 0) cancelled_lost,
       coalesce(b.scheduled, 0) scheduled, coalesce(b.outcome_missing, 0) outcome_missing,
-      coalesce(b.no_meeting, 0) no_meeting,
+      coalesce(b.activated, 0) activated,
       coalesce(m.mqls, 0) mqls, coalesce(s.sqls, 0) sqls
     from keys k
     left join calls c using (owner_id, bucket)
@@ -192,7 +202,7 @@ async function aggregate(range: { startDate: string; endDate: string }, group: s
     cancelledLost: Number(r.cancelled_lost),
     scheduled: Number(r.scheduled),
     outcomeMissing: Number(r.outcome_missing),
-    noMeeting: Number(r.no_meeting),
+    activated: Number(r.activated),
     mqls: Number(r.mqls),
     sqls: Number(r.sqls),
   }));
@@ -204,7 +214,7 @@ export async function getTeamStats(range: { startDate: string; endDate: string }
   const [members, rows] = await Promise.all([getTeamMembers(), aggregate(range, group, false)]);
   const byOwner = new Map(rows.map((r) => [r.ownerId, r]));
   const reps = members
-    .filter((m) => m.teamGroup === group)
+    .filter((m) => group === ALL_BDRS || m.teamGroup === group)
     .map((m) => {
       const r = byOwner.get(m.hubspotOwnerId);
       const counts: Counts = { ...ZERO };
@@ -271,7 +281,8 @@ export async function getTeamBookings(range: { startDate: string; endDate: strin
   const rows = await db.execute<Record<string, unknown>>(sql`
     select ${BOOKING_SELECT}
     from team_deals d
-    join team_members tm on tm.hubspot_owner_id = d.booked_by_owner_id and tm.team_group = ${group}
+    join team_members tm on tm.hubspot_owner_id = d.booked_by_owner_id
+      and (${group} = ${ALL_BDRS} or tm.team_group = ${group})
     where ${BDR_SOURCED} and ${dealDay} between ${range.startDate} and ${range.endDate}
     order by d.created_at desc
   `);
@@ -279,18 +290,203 @@ export async function getTeamBookings(range: { startDate: string; endDate: strin
 }
 
 // "Needs attention" queue — independent of the selected period: every open
-// BDR booking for the group that needs someone to set Intro Meeting Status
-// (meeting passed with no result, or no meeting in HubSpot at all), plus
-// everything waiting on a rebook. Deals already closed in HubSpot are skipped.
+// BDR booking for the group whose meeting passed with no Intro Meeting Status,
+// plus everything waiting on a rebook. (Deals with no meeting at all are
+// activated leads, not problems — unless a meeting was deleted, in which case
+// setting Intro Meeting Status turns it back into a meeting.) Deals already closed in HubSpot are skipped.
 export async function getNeedsAttention(group: string) {
   const rows = await db.execute<Record<string, unknown>>(sql`
     select ${BOOKING_SELECT}
     from team_deals d
-    join team_members tm on tm.hubspot_owner_id = d.booked_by_owner_id and tm.team_group = ${group}
+    join team_members tm on tm.hubspot_owner_id = d.booked_by_owner_id
+      and (${group} = ${ALL_BDRS} or tm.team_group = ${group})
     where ${BDR_SOURCED}
-      and d.meeting_status in ('not_logged', 'no_meeting', 'needs_rebook')
+      and d.meeting_status in ('not_logged', 'needs_rebook')
       and coalesce(d.deal_stage, '') not in ('123017108', 'closedlost', 'closedwon')
     order by case d.meeting_status when 'needs_rebook' then 0 when 'not_logged' then 1 else 2 end, d.created_at
   `);
   return rows.map(toBooking);
+}
+
+// --- Segments & campaigns ---------------------------------------------------------
+// Unlike the monthly view, segment numbers use each segment's OWN start/end
+// window (what the BDR registered); the selected period only decides which
+// segments are listed (those whose window overlaps it).
+
+export type SegmentStatRow = {
+  segmentId: number;
+  campaignId: number;
+  campaignName: string;
+  listName: string;
+  hubspotListId: string;
+  rep: string;
+  ownerId: string;
+  startDate: string;
+  endDate: string | null;
+  leads: number;
+  contacted: number;
+  dials: number;
+  connected: number;
+  conversations: number;
+  notInterested: number;
+  unqualified: number;
+  activated: number;
+  meetings: number;
+  bant: number;
+  held: number;
+  needsRebook: number;
+  noShowLost: number;
+  cancelledLost: number;
+  mqls: number;
+  sqls: number;
+  showRate: number | null;
+};
+
+const SEG_COUNT_KEYS = [
+  "leads",
+  "contacted",
+  "dials",
+  "connected",
+  "conversations",
+  "notInterested",
+  "unqualified",
+  "activated",
+  "meetings",
+  "bant",
+  "held",
+  "needsRebook",
+  "noShowLost",
+  "cancelledLost",
+  "mqls",
+  "sqls",
+] as const;
+
+function segShowRate(r: { held: number; needsRebook: number; noShowLost: number; cancelledLost: number }) {
+  const resolved = r.held + r.needsRebook + r.noShowLost + r.cancelledLost;
+  return resolved > 0 ? Math.round((r.held / resolved) * 100) : null;
+}
+
+// accounts=true counts distinct companies instead of people for the lead
+// columns (an account is "contacted" if anyone there was called, etc.).
+export async function getSegmentStats(
+  range: { startDate: string; endDate: string },
+  group: string,
+  accounts: boolean,
+): Promise<SegmentStatRow[]> {
+  const n = (cond: string) =>
+    sql.raw(accounts ? `count(distinct l.company_id) filter (where ${cond})` : `count(*) filter (where ${cond})`);
+  const rows = await db.execute<Record<string, unknown>>(sql`
+    with leads as (
+      select l.segment_id,
+        ${n("true")} as leads,
+        ${n("l.calls > 0")} as contacted,
+        sum(l.calls) as dials,
+        ${n("l.connected")} as connected,
+        ${n("l.conversation")} as conversations,
+        ${n("l.lead_status = 'Not Interested'")} as not_interested,
+        ${n("l.lead_status = 'Unqualified'")} as unqualified
+      from segment_leads l group by 1
+    ),
+    deals as (
+      select d.segment_id,
+        count(*) filter (where d.meeting_status = 'no_meeting') as activated,
+        count(*) filter (where d.meeting_status <> 'no_meeting') as meetings,
+        count(*) filter (where d.bant) as bant,
+        count(*) filter (where d.meeting_status = 'held') as held,
+        count(*) filter (where d.meeting_status = 'needs_rebook') as needs_rebook,
+        count(*) filter (where d.meeting_status = 'no_show_lost') as no_show_lost,
+        count(*) filter (where d.meeting_status = 'cancelled_lost') as cancelled_lost,
+        count(d.mql_date) as mqls,
+        count(d.sql_date) as sqls
+      from team_deals d where d.segment_id is not null and ${BDR_SOURCED} group by 1
+    )
+    select s.id, s.campaign_id, c.name as campaign_name, s.list_name, s.hubspot_list_id, s.owner_id,
+      coalesce(tm.name, s.owner_id) as rep, s.start_date::text as start_date, s.end_date::text as end_date,
+      coalesce(l.leads, 0) leads, coalesce(l.contacted, 0) contacted, coalesce(l.dials, 0) dials,
+      coalesce(l.connected, 0) connected, coalesce(l.conversations, 0) conversations,
+      coalesce(l.not_interested, 0) not_interested, coalesce(l.unqualified, 0) unqualified,
+      coalesce(d.activated, 0) activated, coalesce(d.meetings, 0) meetings, coalesce(d.bant, 0) bant,
+      coalesce(d.held, 0) held, coalesce(d.needs_rebook, 0) needs_rebook, coalesce(d.no_show_lost, 0) no_show_lost,
+      coalesce(d.cancelled_lost, 0) cancelled_lost, coalesce(d.mqls, 0) mqls, coalesce(d.sqls, 0) sqls
+    from segments s
+    join bdr_campaigns c on c.id = s.campaign_id and not c.archived
+    left join team_members tm on tm.hubspot_owner_id = s.owner_id
+    left join leads l on l.segment_id = s.id
+    left join deals d on d.segment_id = s.id
+    where s.owner_id in (${teamOwnersSql(group)})
+      and s.start_date <= ${range.endDate}::date
+      and coalesce(s.end_date, current_date) >= ${range.startDate}::date
+    order by c.name, s.start_date, s.list_name
+  `);
+  return rows.map((r) => {
+    const row = {
+      segmentId: Number(r.id),
+      campaignId: Number(r.campaign_id),
+      campaignName: String(r.campaign_name),
+      listName: String(r.list_name),
+      hubspotListId: String(r.hubspot_list_id),
+      rep: String(r.rep),
+      ownerId: String(r.owner_id),
+      startDate: String(r.start_date),
+      endDate: (r.end_date as string) ?? null,
+      leads: Number(r.leads),
+      contacted: Number(r.contacted),
+      dials: Number(r.dials),
+      connected: Number(r.connected),
+      conversations: Number(r.conversations),
+      notInterested: Number(r.not_interested),
+      unqualified: Number(r.unqualified),
+      activated: Number(r.activated),
+      meetings: Number(r.meetings),
+      bant: Number(r.bant),
+      held: Number(r.held),
+      needsRebook: Number(r.needs_rebook),
+      noShowLost: Number(r.no_show_lost),
+      cancelledLost: Number(r.cancelled_lost),
+      mqls: Number(r.mqls),
+      sqls: Number(r.sqls),
+    };
+    return { ...row, showRate: segShowRate(row) };
+  });
+}
+
+// Campaign totals = sum of its listed segments.
+export function rollUpByCampaign(rows: SegmentStatRow[]): SegmentStatRow[] {
+  const byCampaign = new Map<number, SegmentStatRow>();
+  for (const r of rows) {
+    const cur = byCampaign.get(r.campaignId);
+    if (!cur) {
+      byCampaign.set(r.campaignId, {
+        ...r,
+        listName: "",
+        rep: "",
+        segmentId: 0,
+      });
+      continue;
+    }
+    for (const k of SEG_COUNT_KEYS) cur[k] += r[k];
+    if (r.startDate < cur.startDate) cur.startDate = r.startDate;
+    cur.endDate = cur.endDate == null || r.endDate == null ? null : r.endDate > cur.endDate ? r.endDate : cur.endDate;
+  }
+  return [...byCampaign.values()].map((r) => ({ ...r, showRate: segShowRate(r) }));
+}
+
+export function sumSegments(rows: SegmentStatRow[]): Record<(typeof SEG_COUNT_KEYS)[number], number> {
+  const out = Object.fromEntries(SEG_COUNT_KEYS.map((k) => [k, 0])) as Record<(typeof SEG_COUNT_KEYS)[number], number>;
+  for (const r of rows) for (const k of SEG_COUNT_KEYS) out[k] += r[k];
+  return out;
+}
+
+// Bookings in the period that aren't credited to any registered segment.
+export async function getOutsideSegmentDeals(range: { startDate: string; endDate: string }, group: string) {
+  const dealDay = TORONTO_DAY("d.created_at");
+  const [row] = await db.execute<{ meetings: number; activated: number }>(sql`
+    select count(*) filter (where d.meeting_status <> 'no_meeting')::int as meetings,
+           count(*) filter (where d.meeting_status = 'no_meeting')::int as activated
+    from team_deals d
+    where d.segment_id is null and ${BDR_SOURCED}
+      and d.booked_by_owner_id in (${teamOwnersSql(group)})
+      and ${dealDay} between ${range.startDate} and ${range.endDate}
+  `);
+  return { meetings: Number(row?.meetings ?? 0), activated: Number(row?.activated ?? 0) };
 }

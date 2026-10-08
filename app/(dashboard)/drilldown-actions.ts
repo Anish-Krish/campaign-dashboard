@@ -1,10 +1,12 @@
 "use server";
 
+import { requireAdmin } from "@/lib/session";
 import { getContactsForMetric, getDailyCallStats, getDailyMeetingStats, type DrillDownMetric } from "@/lib/queries";
 
 const CHART_METRICS: DrillDownMetric[] = ["calls", "connects", "meetings"];
 
 export async function fetchDrillDown(metric: DrillDownMetric, campaignId?: number) {
+  await requireAdmin();
   const showChart = CHART_METRICS.includes(metric);
   const [data, dailyCallStats, dailyMeetingStats] = await Promise.all([
     getContactsForMetric(metric, campaignId),

@@ -328,9 +328,75 @@ export const teamDeals = pgTable("team_deals", {
   // workflow; blank + Source ZoomInfo/6Sense => BDR). Only BDR counts on the
   // Team page — marketing leads are kept fully separate.
   sourceGroup: text("source_group"),
+  contactIds: text("contact_ids").array(), // deal's associated contacts — segment attribution
+  companyIds: text("company_ids").array(),
+  segmentId: integer("segment_id"), // segment this deal is credited to (null = outside segments)
   mqlDate: date("mql_date"),
   sqlDate: date("sql_date"),
   bant: boolean("bant").notNull().default(false),
   closedWon: boolean("closed_won").notNull().default(false),
   lastSyncedAt: timestamp("last_synced_at").notNull().defaultNow(),
 });
+
+// --- Users ----------------------------------------------------------------------
+// Per-person logins (replacing the single shared password). role "admin" sees
+// everything; role "bdr" sees the Team page and registers their own segments
+// — hubspotOwnerId ties a BDR login to their HubSpot owner so their
+// registrations are attributed to them automatically.
+export const users = pgTable("users", {
+  id: serial("id").primaryKey(),
+  username: text("username").notNull().unique(), // lowercase
+  name: text("name").notNull(),
+  passwordHash: text("password_hash").notNull(), // scrypt: "salt:hash" (hex)
+  role: text("role").notNull().default("bdr"), // admin | bdr
+  hubspotOwnerId: text("hubspot_owner_id"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// --- BDR campaigns & segments ------------------------------------------------------
+// Campaign = an outbound motion ("NPO Sage Intacct USA"); segment = one rep's
+// HubSpot list inside it ("… - Hadi (List 2)"), tracked individually because
+// lists differ. Only activity inside a segment's start/end window, by the
+// segment's rep, counts toward it. Separate from the legacy `campaigns` table,
+// which is archived.
+export const bdrCampaigns = pgTable("bdr_campaigns", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull().unique(),
+  archived: boolean("archived").notNull().default(false),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const segments = pgTable("segments", {
+  id: serial("id").primaryKey(),
+  campaignId: integer("campaign_id")
+    .notNull()
+    .references(() => bdrCampaigns.id, { onDelete: "cascade" }),
+  hubspotListId: text("hubspot_list_id").notNull(), // ILS segment ID
+  listName: text("list_name").notNull(),
+  ownerId: text("owner_id").notNull(), // the rep's HubSpot owner ID
+  startDate: date("start_date").notNull(),
+  endDate: date("end_date"), // null = still running
+  createdByUserId: integer("created_by_user_id"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  lastSyncedAt: timestamp("last_synced_at"),
+});
+
+// One row per (segment, contact on its list). Call fields only count calls BY
+// the segment's rep INSIDE its window; a call is credited to one segment only
+// (the most recently registered matching one — see lib/segment-sync.ts).
+export const segmentLeads = pgTable(
+  "segment_leads",
+  {
+    segmentId: integer("segment_id")
+      .notNull()
+      .references(() => segments.id, { onDelete: "cascade" }),
+    contactId: text("contact_id").notNull(),
+    companyId: text("company_id"),
+    leadStatus: text("lead_status"),
+    calls: integer("calls").notNull().default(0),
+    connected: boolean("connected").notNull().default(false),
+    conversation: boolean("conversation").notNull().default(false),
+  },
+  (t) => [primaryKey({ columns: [t.segmentId, t.contactId] })],
+);

@@ -1,8 +1,10 @@
 "use server";
 
+import { requireAdmin } from "@/lib/session";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
-import { campaigns, owners, teamMembers } from "@/lib/db/schema";
+import { campaigns, owners, teamMembers, users } from "@/lib/db/schema";
+import { hashPassword } from "@/lib/passwords";
 import { eq } from "drizzle-orm";
 import { setAuthorityKeywords } from "@/lib/authority";
 import { runSyncJob } from "@/lib/sync";
@@ -24,6 +26,7 @@ function str(formData: FormData, key: string): string | null {
 }
 
 export async function createCampaign(formData: FormData) {
+  await requireAdmin();
   const name = str(formData, "name");
   const hubspotListId = str(formData, "hubspotListId");
   if (!name || !hubspotListId) return;
@@ -50,6 +53,7 @@ export async function createCampaign(formData: FormData) {
 }
 
 export async function updateCampaignStatus(formData: FormData) {
+  await requireAdmin();
   const id = Number(formData.get("id"));
   const status = str(formData, "status");
   if (!id || !status) return;
@@ -62,6 +66,7 @@ export async function updateCampaignStatus(formData: FormData) {
 }
 
 export async function updateCampaign(formData: FormData) {
+  await requireAdmin();
   const id = Number(formData.get("id"));
   const name = str(formData, "name");
   const hubspotListId = str(formData, "hubspotListId");
@@ -90,6 +95,7 @@ export async function updateCampaign(formData: FormData) {
 }
 
 export async function deleteCampaign(formData: FormData) {
+  await requireAdmin();
   const id = Number(formData.get("id"));
   if (!id) return;
 
@@ -107,6 +113,7 @@ export async function deleteCampaign(formData: FormData) {
 // (best-effort, same as syncCampaignSafely above) since a keyword change can
 // reclassify contacts anywhere.
 export async function saveAuthorityKeywords(formData: FormData) {
+  await requireAdmin();
   const raw = str(formData, "keywords") ?? "";
   const keywords = raw
     .split(",")
@@ -136,6 +143,7 @@ function revalidateTeam() {
 }
 
 export async function addTeamMember(formData: FormData) {
+  await requireAdmin();
   const ownerId = str(formData, "ownerId");
   if (!ownerId) return;
   const [owner] = await db.select().from(owners).where(eq(owners.hubspotOwnerId, ownerId));
@@ -154,6 +162,7 @@ export async function addTeamMember(formData: FormData) {
 }
 
 export async function updateTeamMember(formData: FormData) {
+  await requireAdmin();
   const ownerId = str(formData, "ownerId");
   const name = str(formData, "name");
   if (!ownerId || !name) return;
@@ -171,8 +180,49 @@ export async function updateTeamMember(formData: FormData) {
 }
 
 export async function removeTeamMember(formData: FormData) {
+  await requireAdmin();
   const ownerId = str(formData, "ownerId");
   if (!ownerId) return;
   await db.delete(teamMembers).where(eq(teamMembers.hubspotOwnerId, ownerId));
   revalidateTeam();
+}
+
+// --- Users ----------------------------------------------------------------------
+
+export async function createUser(formData: FormData) {
+  await requireAdmin();
+  const username = str(formData, "username")?.toLowerCase();
+  const name = str(formData, "name");
+  const password = str(formData, "password");
+  if (!username || !name || !password) return;
+  await db
+    .insert(users)
+    .values({
+      username,
+      name,
+      passwordHash: await hashPassword(password),
+      role: str(formData, "role") === "admin" ? "admin" : "bdr",
+      hubspotOwnerId: str(formData, "hubspotOwnerId"),
+    })
+    .onConflictDoNothing();
+  revalidatePath("/settings");
+}
+
+export async function updateUser(formData: FormData) {
+  const admin = await requireAdmin();
+  const id = Number(formData.get("id"));
+  if (!id) return;
+  const password = str(formData, "password");
+  await db
+    .update(users)
+    .set({
+      name: str(formData, "name") ?? undefined,
+      role: str(formData, "role") === "admin" ? "admin" : "bdr",
+      hubspotOwnerId: str(formData, "hubspotOwnerId"),
+      // an admin can't lock themselves out
+      active: id === admin.id ? true : formData.get("active") === "on",
+      ...(password ? { passwordHash: await hashPassword(password) } : {}),
+    })
+    .where(eq(users.id, id));
+  revalidatePath("/settings");
 }

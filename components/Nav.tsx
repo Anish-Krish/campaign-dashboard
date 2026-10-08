@@ -1,7 +1,24 @@
 import Link from "next/link";
 import { logout } from "@/app/logout/actions";
+import { getCurrentUser } from "@/lib/session";
 
-export function Nav() {
+// Role-aware: BDR logins see Team + Segments + their account; admins also see
+// the archived legacy views, Enrichment and Settings (proxy.ts enforces it).
+export async function Nav() {
+  const user = await getCurrentUser();
+  const isAdmin = user?.role === "admin";
+  const links = [
+    { href: "/team", label: "Team" },
+    { href: "/segments", label: "Segments" },
+    ...(isAdmin
+      ? [
+          { href: "/archive", label: "Archive" },
+          { href: "/enrichment", label: "Enrichment" },
+          { href: "/settings", label: "Settings" },
+        ]
+      : []),
+  ];
+
   return (
     <header
       style={{
@@ -21,31 +38,25 @@ export function Nav() {
             Online
           </span>
           <nav className="hud-heading flex items-center gap-6 text-xs" style={{ color: "var(--text-secondary)" }}>
-            <Link href="/" className="transition hover:text-[var(--series-blue)]">
-              Dashboard
-            </Link>
-            <Link href="/team" className="transition hover:text-[var(--series-blue)]">
-              Team
-            </Link>
-            <Link href="/campaigns" className="transition hover:text-[var(--series-blue)]">
-              Campaigns
-            </Link>
-            <Link href="/reps" className="transition hover:text-[var(--series-blue)]">
-              Reps
-            </Link>
-            <Link href="/enrichment" className="transition hover:text-[var(--series-blue)]">
-              Enrichment
-            </Link>
-            <Link href="/settings" className="transition hover:text-[var(--series-blue)]">
-              Settings
-            </Link>
+            {links.map((l) => (
+              <Link key={l.href} href={l.href} className="transition hover:text-[var(--series-blue)]">
+                {l.label}
+              </Link>
+            ))}
           </nav>
         </div>
-        <form action={logout}>
-          <button type="submit" className="hud-button rounded px-3 py-1.5 text-xs">
-            Log out
-          </button>
-        </form>
+        <div className="flex items-center gap-4">
+          {user && (
+            <Link href="/account" className="text-xs transition hover:text-[var(--series-blue)]" style={{ color: "var(--text-muted)" }}>
+              {user.name}
+            </Link>
+          )}
+          <form action={logout}>
+            <button type="submit" className="hud-button rounded px-3 py-1.5 text-xs">
+              Log out
+            </button>
+          </form>
+        </div>
       </div>
     </header>
   );

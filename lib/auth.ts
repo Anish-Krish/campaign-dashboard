@@ -30,18 +30,27 @@ async function hmac(message: string): Promise<string> {
   return toBase64Url(sig);
 }
 
-export async function createSessionToken(): Promise<string> {
+export type SessionRole = "admin" | "bdr";
+export type SessionClaims = { userId: number; role: SessionRole };
+
+// Token = "<userId>-<role>-<expiresAt>.<hmac>". The role rides in the signed
+// payload so proxy.ts can gate admin-only pages without a DB lookup; server
+// actions still re-check the user in the DB (see lib/session.ts), so a
+// deactivated user loses access to every write immediately.
+export async function createSessionToken(claims: SessionClaims): Promise<string> {
   const expiresAt = Date.now() + SESSION_TTL_MS;
-  const payload = String(expiresAt);
+  const payload = `${claims.userId}-${claims.role}-${expiresAt}`;
   const sig = await hmac(payload);
   return `${payload}.${sig}`;
 }
 
-export async function verifySessionToken(token: string | undefined): Promise<boolean> {
-  if (!token) return false;
+export async function verifySessionToken(token: string | undefined): Promise<SessionClaims | null> {
+  if (!token) return null;
   const [payload, sig] = token.split(".");
-  if (!payload || !sig) return false;
-  if (Number(payload) < Date.now()) return false;
+  if (!payload || !sig) return null;
+  const [userId, role, expiresAt] = payload.split("-");
+  if (!userId || (role !== "admin" && role !== "bdr") || Number(expiresAt) < Date.now()) return null;
   const expectedSig = await hmac(payload);
-  return sig === expectedSig;
+  if (sig !== expectedSig) return null;
+  return { userId: Number(userId), role };
 }

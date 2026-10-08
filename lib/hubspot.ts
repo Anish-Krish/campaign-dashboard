@@ -22,14 +22,21 @@ function authHeaders() {
   };
 }
 
+// Retries HubSpot's rate-limit responses (429) with backoff — the segment
+// sync reads thousands of contacts/calls per run and can hit the burst limit.
 async function hubspotFetch<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    ...init,
-    headers: { ...authHeaders(), ...(init?.headers ?? {}) },
-  });
+  let res: Response;
+  for (let attempt = 0; ; attempt++) {
+    res = await fetch(`${BASE_URL}${path}`, {
+      ...init,
+      headers: { ...authHeaders(), ...(init?.headers ?? {}) },
+    });
+    if (res.status !== 429 || attempt >= 5) break;
+    await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+  }
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`HubSpot API ${res.status} ${path}: ${body}`);
@@ -40,6 +47,23 @@ async function hubspotFetch<T>(
 function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+// Runs `fn` over items with at most `limit` in flight — batch endpoints used
+// to fire every chunk at once, which is fine for a few hundred records but
+// trips HubSpot's burst limit at segment-sync volumes.
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++;
+        out[i] = await fn(items[i]);
+      }
+    }),
+  );
   return out;
 }
 
@@ -80,13 +104,11 @@ export async function batchReadObjects<P extends Record<string, unknown>>(
   properties: string[],
 ): Promise<Array<{ id: string; properties: P }>> {
   const chunks = chunk(ids, 100).filter((c) => c.length > 0);
-  const pages = await Promise.all(
-    chunks.map((c) =>
-      hubspotFetch<BatchReadResult<P>>(`/crm/v3/objects/${objectType}/batch/read`, {
-        method: "POST",
-        body: JSON.stringify({ properties, inputs: c.map((id) => ({ id })) }),
-      }),
-    ),
+  const pages = await mapLimit(chunks, 4, (c) =>
+    hubspotFetch<BatchReadResult<P>>(`/crm/v3/objects/${objectType}/batch/read`, {
+      method: "POST",
+      body: JSON.stringify({ properties, inputs: c.map((id) => ({ id })) }),
+    }),
   );
   return pages.flatMap((p) => p.results);
 }
@@ -282,16 +304,11 @@ export async function batchReadAssociations(
 ): Promise<Map<string, string[]>> {
   const map = new Map<string, string[]>();
   const chunks = chunk(fromIds, 100).filter((c) => c.length > 0);
-  const pages = await Promise.all(
-    chunks.map((c) =>
-      hubspotFetch<AssociationsBatchResponse>(
-        `/crm/v4/associations/${fromObjectType}/${toObjectType}/batch/read`,
-        {
-          method: "POST",
-          body: JSON.stringify({ inputs: c.map((id) => ({ id })) }),
-        },
-      ),
-    ),
+  const pages = await mapLimit(chunks, 4, (c) =>
+    hubspotFetch<AssociationsBatchResponse>(`/crm/v4/associations/${fromObjectType}/${toObjectType}/batch/read`, {
+      method: "POST",
+      body: JSON.stringify({ inputs: c.map((id) => ({ id })) }),
+    }),
   );
   for (const page of pages) {
     for (const r of page.results) {
@@ -345,4 +362,43 @@ export async function getCallDispositionOptions(): Promise<
     `/calling/v1/dispositions`,
   );
   return options.filter((o) => !o.deleted).map((o) => ({ label: o.label, value: o.id }));
+}
+
+// --- Contact lists (segments) for the registration picker -----------------------
+// POST /crm/v3/lists/search, contact lists only (objectTypeId 0-1), newest first.
+
+export type HubspotList = { listId: string; name: string; size: number | null; createdAt: string };
+
+export async function listContactLists(): Promise<HubspotList[]> {
+  const out: HubspotList[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = await hubspotFetch<{
+      lists: Array<{
+        listId: string;
+        name: string;
+        objectTypeId: string;
+        createdAt?: string;
+        additionalProperties?: Record<string, string>;
+      }>;
+      hasMore: boolean;
+      offset: number;
+    }>(`/crm/v3/lists/search`, {
+      method: "POST",
+      body: JSON.stringify({ offset, count: 500, additionalProperties: ["hs_list_size"] }),
+    });
+    for (const l of page.lists) {
+      if (l.objectTypeId !== "0-1") continue;
+      const size = l.additionalProperties?.hs_list_size;
+      out.push({ listId: String(l.listId), name: l.name, size: size ? Number(size) : null, createdAt: l.createdAt ?? "" });
+    }
+    if (!page.hasMore) break;
+    offset = page.offset;
+  }
+  return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
+export async function getListName(listId: string): Promise<string> {
+  const res = await hubspotFetch<{ list: { name: string } }>(`/crm/v3/lists/${listId}`);
+  return res.list.name;
 }

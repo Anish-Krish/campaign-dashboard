@@ -11,6 +11,7 @@ import {
 import { getAuthorityKeywords, isAuthorityTitle } from "@/lib/authority";
 import { toTorontoDateStr } from "@/lib/timezone";
 import { runTeamSync } from "@/lib/team-sync";
+import { runSegmentSync } from "@/lib/segment-sync";
 
 type Outcome = "not_interested" | "unqualified" | "activated_lead" | "meeting_booked";
 
@@ -197,7 +198,8 @@ export async function runSync(options?: { campaignIds?: number[] }) {
     ? await db.query.campaigns.findMany({
         where: (c, { inArray }) => inArray(c.id, options.campaignIds!),
       })
-    : await db.query.campaigns.findMany();
+    : // archived legacy campaigns stop syncing
+      await db.query.campaigns.findMany({ where: (c, { ne }) => ne(c.status, "archived") });
 
   // One campaign failing (bad list ID, a transient HubSpot error, etc.) must
   // not prevent every other campaign from syncing — isolate failures per
@@ -708,6 +710,14 @@ export async function runSyncJob(options?: { campaignIds?: number[] }) {
         const message = err instanceof Error ? err.message : String(err);
         console.error("[sync] team sync failed:", message);
         result.failed.push({ campaignId: 0, name: "Team performance", error: message });
+      }
+      // After the team sync: segment attribution reads team_deals.contact_ids.
+      try {
+        await runSegmentSync();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error("[sync] segment sync failed:", message);
+        result.failed.push({ campaignId: 0, name: "Segments", error: message });
       }
     }
     const hasFailures = result.failed.length > 0;
