@@ -1,6 +1,15 @@
 import { getAuthorityKeywords } from "@/lib/authority";
 import { getCampaignsWithCounts } from "@/lib/queries";
-import { createCampaign, deleteCampaign, saveAuthorityKeywords, updateCampaign } from "./actions";
+import { getOwnersNotOnTeam, getTeamGroups, getTeamMembers } from "@/lib/team-queries";
+import {
+  addTeamMember,
+  createCampaign,
+  deleteCampaign,
+  removeTeamMember,
+  saveAuthorityKeywords,
+  updateCampaign,
+  updateTeamMember,
+} from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -11,14 +20,139 @@ const cardStyle = { background: "var(--chart-surface)", borderColor: "var(--bord
 const labelStyle = { color: "var(--text-secondary)" };
 
 export default async function SettingsPage() {
-  const [campaigns, keywords] = await Promise.all([
+  const [campaigns, keywords, team, groups, availableOwners] = await Promise.all([
     getCampaignsWithCounts(),
     getAuthorityKeywords(),
+    getTeamMembers(),
+    getTeamGroups(),
+    getOwnersNotOnTeam(),
   ]);
 
   return (
     <div className="space-y-10">
       <h1 className="text-2xl font-semibold">Settings</h1>
+
+      <section className="rounded-lg border p-5" style={cardStyle}>
+        <h2 className="mb-2 text-lg font-medium">Team</h2>
+        <p className="mb-4 text-sm" style={{ color: "var(--text-muted)" }}>
+          Who shows up on the Team page. Each group gets its own leaderboard — put trial reps for a
+          competition in their own group (e.g. &ldquo;Trial – Nov 2026&rdquo;). A rep must be a HubSpot
+          user so their calls and deals carry their owner ID; history appears as soon as they&apos;re added.
+        </p>
+
+        <datalist id="team-groups">
+          {groups.map((g) => (
+            <option key={g} value={g} />
+          ))}
+        </datalist>
+
+        <div className="mb-6 space-y-3">
+          {team.length === 0 && <p style={{ color: "var(--text-muted)" }}>No team members yet.</p>}
+          {team.map((m) => (
+            <form
+              key={m.hubspotOwnerId}
+              action={updateTeamMember}
+              className="grid grid-cols-2 items-end gap-3 rounded border p-3 sm:grid-cols-6"
+              style={{ borderColor: "var(--gridline)" }}
+            >
+              <input type="hidden" name="ownerId" value={m.hubspotOwnerId} />
+              <div className="col-span-2 sm:col-span-1">
+                <label className="mb-1 block text-xs" style={labelStyle}>
+                  Name
+                </label>
+                <input name="name" defaultValue={m.name} required className={inputClass} style={inputStyle} />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs" style={labelStyle}>
+                  Role
+                </label>
+                <select name="role" defaultValue={m.role} className={inputClass} style={inputStyle}>
+                  <option value="bdr">BDR</option>
+                  <option value="ae">AE</option>
+                  <option value="manager">Manager</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs" style={labelStyle}>
+                  Group
+                </label>
+                <input name="teamGroup" list="team-groups" defaultValue={m.teamGroup} className={inputClass} style={inputStyle} />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs" style={labelStyle}>
+                  Start
+                </label>
+                <input name="startDate" type="date" defaultValue={m.startDate ?? ""} className={inputClass} style={inputStyle} />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs" style={labelStyle}>
+                  End
+                </label>
+                <input name="endDate" type="date" defaultValue={m.endDate ?? ""} className={inputClass} style={inputStyle} />
+              </div>
+              <div className="flex gap-2">
+                <button type="submit" className="rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500">
+                  Save
+                </button>
+                <button
+                  type="submit"
+                  formAction={removeTeamMember}
+                  className="rounded border px-3 py-2 text-sm hover:bg-red-950"
+                  style={{ borderColor: "var(--series-red)", color: "var(--series-red)" }}
+                >
+                  Remove
+                </button>
+              </div>
+            </form>
+          ))}
+        </div>
+
+        <form action={addTeamMember} className="grid grid-cols-2 items-end gap-3 sm:grid-cols-6">
+          <div className="col-span-2">
+            <label className="mb-1 block text-xs" style={labelStyle}>
+              Add HubSpot user
+            </label>
+            <select name="ownerId" required className={inputClass} style={inputStyle} defaultValue="">
+              <option value="" disabled>
+                Choose…
+              </option>
+              {availableOwners.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name}
+                  {o.email ? ` (${o.email})` : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs" style={labelStyle}>
+              Role
+            </label>
+            <select name="role" defaultValue="bdr" className={inputClass} style={inputStyle}>
+              <option value="bdr">BDR</option>
+              <option value="ae">AE</option>
+              <option value="manager">Manager</option>
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs" style={labelStyle}>
+              Group
+            </label>
+            <input name="teamGroup" list="team-groups" defaultValue="Core BDRs" className={inputClass} style={inputStyle} />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs" style={labelStyle}>
+              Start
+            </label>
+            <input name="startDate" type="date" className={inputClass} style={inputStyle} />
+          </div>
+          <div>
+            <button type="submit" className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500">
+              Add to team
+            </button>
+          </div>
+        </form>
+      </section>
 
       <section className="rounded-lg border p-5" style={cardStyle}>
         <h2 className="mb-4 text-lg font-medium">Add campaign</h2>

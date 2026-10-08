@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
-import { campaigns } from "@/lib/db/schema";
+import { campaigns, owners, teamMembers } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { setAuthorityKeywords } from "@/lib/authority";
 import { runSyncJob } from "@/lib/sync";
@@ -124,4 +124,55 @@ export async function saveAuthorityKeywords(formData: FormData) {
   revalidatePath("/settings");
   revalidatePath("/campaigns");
   revalidatePath("/");
+}
+
+// --- Team members -------------------------------------------------------------
+// Team data itself is synced for every HubSpot owner (see lib/team-sync.ts),
+// so adding someone here shows their full history immediately — no resync.
+
+function revalidateTeam() {
+  revalidatePath("/settings");
+  revalidatePath("/team");
+}
+
+export async function addTeamMember(formData: FormData) {
+  const ownerId = str(formData, "ownerId");
+  if (!ownerId) return;
+  const [owner] = await db.select().from(owners).where(eq(owners.hubspotOwnerId, ownerId));
+  await db
+    .insert(teamMembers)
+    .values({
+      hubspotOwnerId: ownerId,
+      name: str(formData, "name") ?? owner?.name ?? ownerId,
+      role: str(formData, "role") ?? "bdr",
+      teamGroup: str(formData, "teamGroup") ?? "Core BDRs",
+      startDate: str(formData, "startDate"),
+      endDate: str(formData, "endDate"),
+    })
+    .onConflictDoNothing();
+  revalidateTeam();
+}
+
+export async function updateTeamMember(formData: FormData) {
+  const ownerId = str(formData, "ownerId");
+  const name = str(formData, "name");
+  if (!ownerId || !name) return;
+  await db
+    .update(teamMembers)
+    .set({
+      name,
+      role: str(formData, "role") ?? "bdr",
+      teamGroup: str(formData, "teamGroup") ?? "Core BDRs",
+      startDate: str(formData, "startDate"),
+      endDate: str(formData, "endDate"),
+    })
+    .where(eq(teamMembers.hubspotOwnerId, ownerId));
+  revalidateTeam();
+}
+
+export async function removeTeamMember(formData: FormData) {
+  const ownerId = str(formData, "ownerId");
+  if (!ownerId) return;
+  await db.delete(teamMembers).where(eq(teamMembers.hubspotOwnerId, ownerId));
+  revalidateTeam();
 }

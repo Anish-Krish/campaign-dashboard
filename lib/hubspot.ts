@@ -9,6 +9,10 @@ export function hubspotContactUrl(contactId: string): string {
   return `https://app.hubspot.com/contacts/${PORTAL_ID}/record/0-1/${contactId}`;
 }
 
+export function hubspotDealUrl(dealId: string): string {
+  return `https://app.hubspot.com/contacts/${PORTAL_ID}/record/0-3/${dealId}`;
+}
+
 function authHeaders() {
   const token = process.env.HUBSPOT_API_KEY;
   if (!token) throw new Error("HUBSPOT_API_KEY is not set");
@@ -160,6 +164,104 @@ export async function getContactCurrentFields(contactIds: string[]): Promise<
     direct_phone?: string;
   }>("contacts", contactIds, ["email", "phone", "work_phone", "mobilephone", "direct_phone"]);
   return records.map((r) => ({ id: r.id, ...r.properties }));
+}
+
+// --- CRM search ---------------------------------------------------------------
+// POST /crm/v3/objects/{type}/search. Two hard limits shape this: the search
+// endpoint is rate-limited far more tightly than the rest of the API (~5
+// req/s per portal — 429s are retried with backoff here), and it refuses to
+// page past 10,000 results for a single query. Callers that can exceed 10k
+// (calls) must split their time window instead — see searchAllInWindow.
+
+export type SearchFilter = { propertyName: string; operator: string; value?: string; values?: string[] };
+
+interface SearchResponse<P> {
+  total: number;
+  results: Array<{ id: string; properties: P }>;
+  paging?: { next?: { after: string } };
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function searchPage<P>(
+  objectType: string,
+  body: Record<string, unknown>,
+): Promise<SearchResponse<P>> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await hubspotFetch<SearchResponse<P>>(`/crm/v3/objects/${objectType}/search`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      const is429 = err instanceof Error && err.message.includes("HubSpot API 429");
+      if (!is429 || attempt >= 5) throw err;
+      await sleep(1000 * (attempt + 1));
+    }
+  }
+}
+
+export const SEARCH_RESULT_CAP = 10_000;
+
+// Pages through every result for one filter set. Returns `overflow: true`
+// (and no results) when the match count is past the 10k paging cap, so the
+// caller can narrow the window rather than silently getting a truncated set.
+export async function searchAll<P>(
+  objectType: string,
+  filters: SearchFilter[],
+  properties: string[],
+): Promise<{ overflow: boolean; results: Array<{ id: string; properties: P }> }> {
+  const results: Array<{ id: string; properties: P }> = [];
+  let after: string | undefined;
+  do {
+    const page = await searchPage<P>(objectType, {
+      filterGroups: [{ filters }],
+      properties,
+      // Without an explicit sort, search result order isn't stable between
+      // pages — verified live: paging 1k+ meetings unsorted silently skipped
+      // records (and duplicated others). Sorting on the ID fixes the order.
+      sorts: [{ propertyName: "hs_object_id", direction: "ASCENDING" }],
+      limit: 200,
+      ...(after ? { after } : {}),
+    });
+    if (!after && page.total >= SEARCH_RESULT_CAP) return { overflow: true, results: [] };
+    results.push(...page.results);
+    after = page.paging?.next?.after;
+  } while (after);
+  return { overflow: false, results };
+}
+
+// --- Batch read with property history -----------------------------------------
+// Same endpoint as batchReadObjects, but HubSpot caps batch reads that ask
+// for propertiesWithHistory at 50 inputs. Used to recover a deal's ORIGINAL
+// owner/pipeline — this portal reassigns a deal from the BDR who booked it to
+// the AE once it progresses (verified on live deals), so the current
+// hubspot_owner_id loses who actually booked the meeting.
+
+interface BatchReadWithHistoryResult<P> {
+  results: Array<{
+    id: string;
+    properties: P;
+    propertiesWithHistory?: Record<string, Array<{ value: string; timestamp: string }>>;
+  }>;
+}
+
+export async function batchReadObjectsWithHistory<P extends Record<string, unknown>>(
+  objectType: string,
+  ids: string[],
+  properties: string[],
+  propertiesWithHistory: string[],
+) {
+  const chunks = chunk(ids, 50).filter((c) => c.length > 0);
+  const out: BatchReadWithHistoryResult<P>["results"] = [];
+  for (const c of chunks) {
+    const page = await hubspotFetch<BatchReadWithHistoryResult<P>>(`/crm/v3/objects/${objectType}/batch/read`, {
+      method: "POST",
+      body: JSON.stringify({ properties, propertiesWithHistory, inputs: c.map((id) => ({ id })) }),
+    });
+    out.push(...page.results);
+  }
+  return out;
 }
 
 // --- Associations (v4) ------------------------------------------------------

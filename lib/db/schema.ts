@@ -9,6 +9,7 @@ import {
   date,
   jsonb,
   unique,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 
 export const engagementStatusEnum = pgEnum("engagement_status", [
@@ -261,4 +262,74 @@ export const enrichmentFieldEvents = pgTable("enrichment_field_events", {
   creditsConsumed: integer("credits_consumed").notNull().default(0),
   errorMessage: text("error_message"),
   occurredAt: timestamp("occurred_at").notNull().defaultNow(),
+});
+
+// --- Team performance ---------------------------------------------------------
+// Campaign-independent: everything below is synced straight from HubSpot by
+// owner, not via campaign lists (see lib/team-sync.ts), so a rep's monthly /
+// yearly numbers include all their work, not only contacts that happened to
+// be on a configured campaign list.
+
+// Who counts as "the team". `teamGroup` lets the same page run a trial-rep
+// competition (one group per cohort) alongside the core BDRs without mixing
+// leaderboards. start/end dates are informational + used to grey out reps
+// outside their tenure; data itself is never filtered by them.
+export const teamMembers = pgTable("team_members", {
+  hubspotOwnerId: text("hubspot_owner_id").primaryKey(),
+  name: text("name").notNull(),
+  role: text("role").notNull().default("bdr"), // bdr | ae | manager
+  teamGroup: text("team_group").notNull().default("Core BDRs"),
+  startDate: date("start_date"),
+  endDate: date("end_date"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// Calls pre-aggregated per owner per Toronto day per disposition — the portal
+// logs ~650+ dials/day today (and 15-20 trial reps would multiply that), so
+// storing every call row isn't worth it. Synced for EVERY owner, not just team
+// members, so adding someone to the team later shows their history at once.
+// Each sync recomputes whole days, which keeps the upsert idempotent.
+export const teamCallDaily = pgTable(
+  "team_call_daily",
+  {
+    ownerId: text("owner_id").notNull(),
+    day: date("day").notNull(),
+    dispositionLabel: text("disposition_label").notNull(), // "" when none logged
+    direction: text("direction").notNull(), // OUTBOUND | INBOUND | ""
+    calls: integer("calls").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.ownerId, t.day, t.dispositionLabel, t.direction] })],
+);
+
+// One row per deal that was CREATED in the Marketing Pipeline — in this
+// portal a BDR creates "<Company> - New Deal" there when they book an intro
+// meeting, and the deal is later moved to the Sales Pipeline and reassigned
+// to the AE (verified on live deal history). So bookedByOwnerId is the
+// deal's FIRST owner, and the meeting fields describe the intro meeting found
+// on the deal or its contacts.
+export const teamDeals = pgTable("team_deals", {
+  hubspotDealId: text("hubspot_deal_id").primaryKey(),
+  dealName: text("deal_name"),
+  bookedByOwnerId: text("booked_by_owner_id"),
+  currentOwnerId: text("current_owner_id"),
+  pipeline: text("pipeline"),
+  dealStage: text("deal_stage"),
+  createdAt: timestamp("created_at").notNull(), // booking date — month attribution for meeting metrics
+  meetingId: text("meeting_id"),
+  meetingAt: timestamp("meeting_at"),
+  // held | needs_rebook | no_show_lost | cancelled_lost | scheduled | not_logged | no_meeting
+  // From the deal's "Intro Meeting Status" when set (statusSource = hubspot),
+  // else inferred from meeting records (auto) — see lib/team-sync.ts.
+  meetingStatus: text("meeting_status").notNull(),
+  statusSource: text("status_source").notNull().default("auto"),
+  statusSince: timestamp("status_since"), // when it went needs_rebook / lost — powers "days waiting"
+  rebooked: boolean("rebooked").notNull().default(false),
+  // Deal "Source Group": BDR | Marketing | Sage | Sales Team. Only BDR (or
+  // blank) counts on the Team page — marketing leads are kept fully separate.
+  sourceGroup: text("source_group"),
+  mqlDate: date("mql_date"),
+  sqlDate: date("sql_date"),
+  bant: boolean("bant").notNull().default(false),
+  closedWon: boolean("closed_won").notNull().default(false),
+  lastSyncedAt: timestamp("last_synced_at").notNull().defaultNow(),
 });

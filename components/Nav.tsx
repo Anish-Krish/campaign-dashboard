@@ -24,6 +24,9 @@ export function Nav() {
             <Link href="/" className="transition hover:text-[var(--series-blue)]">
               Dashboard
             </Link>
+            <Link href="/team" className="transition hover:text-[var(--series-blue)]">
+              Team
+            </Link>
             <Link href="/campaigns" className="transition hover:text-[var(--series-blue)]">
               Campaigns
             </Link>

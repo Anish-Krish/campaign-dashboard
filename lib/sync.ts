@@ -10,6 +10,7 @@ import {
 } from "@/lib/hubspot";
 import { getAuthorityKeywords, isAuthorityTitle } from "@/lib/authority";
 import { toTorontoDateStr } from "@/lib/timezone";
+import { runTeamSync } from "@/lib/team-sync";
 
 type Outcome = "not_interested" | "unqualified" | "activated_lead" | "meeting_booked";
 
@@ -697,6 +698,18 @@ export async function runSyncJob(options?: { campaignIds?: number[] }) {
 
   try {
     const result = await runSync(options);
+    // Team performance sync is campaign-independent, so it only runs on a
+    // full sync (not the single-campaign resync after a Settings save), and
+    // is isolated the same way a failing campaign is.
+    if (!options?.campaignIds) {
+      try {
+        await runTeamSync();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error("[sync] team sync failed:", message);
+        result.failed.push({ campaignId: 0, name: "Team performance", error: message });
+      }
+    }
     const hasFailures = result.failed.length > 0;
     await db
       .update(syncRuns)
