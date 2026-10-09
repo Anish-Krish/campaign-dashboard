@@ -8,7 +8,8 @@ import { asc, sql, type SQL } from "drizzle-orm";
 // "activity" (default, "when it happened") — every number lands in the
 //   period the event happened:
 //   - Meetings (set): BDR-sourced Marketing-Pipeline deals created in the
-//     period that have a meeting. Activated = deal created, no meeting.
+//     period that have a meeting. Activated = a contact set to Lead Status
+//     "Open Deal" in the period with no deal yet (lib/activated.ts).
 //   - Sat: intro meetings that took place in the period and were held
 //     (notetaker recording or outcome Completed), whenever they were booked.
 //   - Show rate: of the intro meetings that took place in the period,
@@ -129,6 +130,7 @@ async function dealMetrics(
   const e = dayLiteral(range.endDate);
   const dealDay = TORONTO_DAY("d.created_at");
   const meetDay = TORONTO_DAY("m.meeting_at");
+  const actDay = TORONTO_DAY("d.activated_at");
   const bookedIn = sql`${dealDay} between ${s} and ${e}`;
   const dealBucket = bucketOf(sql`(${dealDay})::date`, g);
   const cohort = mode === "cohort";
@@ -143,7 +145,6 @@ async function dealMetrics(
     with booked as (
       select ${key} as k, ${dealBucket} as bucket,
         count(*) filter (where d.meeting_status <> 'no_meeting') as meetings,
-        count(*) filter (where d.meeting_status = 'no_meeting') as activated,
         count(*) filter (where d.bant) as c_bant,
         count(d.mql_date) as c_mqls,
         count(d.sql_date) as c_sqls
@@ -169,15 +170,22 @@ async function dealMetrics(
       where ${where} and ${BDR_SOURCED} and ${attIn}
       group by 1, 2
     ),
+    -- activated_leads shaped like team_deals so the same key / where apply
+    act as (
+      select ${key} as k, ${bucketOf(sql`(${actDay})::date`, g)} as bucket, count(*) as n
+      from (select owner_id as booked_by_owner_id, segment_id, activated_at from activated_leads) d
+      where ${where} and ${actDay} between ${s} and ${e}
+      group by 1, 2
+    ),
     bant as (${dated("d.bant_date")}),
     mqls as (${dated("d.mql_date")}),
     sqls as (${dated("d.sql_date")}),
     keys as (
-      select k, bucket from booked union select k, bucket from att
+      select k, bucket from booked union select k, bucket from att union select k, bucket from act
       union select k, bucket from bant union select k, bucket from mqls union select k, bucket from sqls
     )
     select keys.k, keys.bucket,
-      coalesce(b.meetings, 0) meetings, coalesce(b.activated, 0) activated,
+      coalesce(b.meetings, 0) meetings, coalesce(ac.n, 0) activated,
       coalesce(a.sat, 0) sat, coalesce(a.no_shows, 0) no_shows, coalesce(a.cancels, 0) cancels,
       coalesce(a.miss_rebook, 0) miss_rebook, coalesce(a.miss_rebooked, 0) miss_rebooked, coalesce(a.miss_lost, 0) miss_lost,
       coalesce(a.outcome_missing, 0) outcome_missing, coalesce(a.scheduled, 0) scheduled,
@@ -187,6 +195,7 @@ async function dealMetrics(
     from keys
     left join booked b on b.k is not distinct from keys.k and b.bucket = keys.bucket
     left join att a on a.k is not distinct from keys.k and a.bucket = keys.bucket
+    left join act ac on ac.k is not distinct from keys.k and ac.bucket = keys.bucket
     left join bant bt on bt.k is not distinct from keys.k and bt.bucket = keys.bucket
     left join mqls mq on mq.k is not distinct from keys.k and mq.bucket = keys.bucket
     left join sqls sq on sq.k is not distinct from keys.k and sq.bucket = keys.bucket
@@ -644,12 +653,64 @@ export function sumSegments(rows: SegmentStatRow[]): Record<SegCountKey, number>
 export async function getOutsideSegmentDeals(range: DateRange, f: TeamFilter) {
   const dealDay = TORONTO_DAY("d.created_at");
   const [row] = await db.execute<{ meetings: number; activated: number }>(sql`
-    select count(*) filter (where d.meeting_status <> 'no_meeting')::int as meetings,
-           count(*) filter (where d.meeting_status = 'no_meeting')::int as activated
-    from team_deals d
-    where d.segment_id is null and ${BDR_SOURCED}
-      and d.booked_by_owner_id in (${teamOwnersSql(f)})
-      and ${dealDay} between ${range.startDate} and ${range.endDate}
+    select (select count(*)::int from team_deals d
+        where d.segment_id is null and ${BDR_SOURCED} and d.meeting_status <> 'no_meeting'
+          and d.booked_by_owner_id in (${teamOwnersSql(f)})
+          and ${dealDay} between ${range.startDate} and ${range.endDate}) as meetings,
+      (select count(*)::int from activated_leads a
+        where a.segment_id is null and a.owner_id in (${teamOwnersSql(f)})
+          and ${TORONTO_DAY("a.activated_at")} between ${range.startDate} and ${range.endDate}) as activated
   `);
   return { meetings: Number(row?.meetings ?? 0), activated: Number(row?.activated ?? 0) };
+}
+
+// --- Activated leads + follow-ups ------------------------------------------------
+
+export type ActivatedLead = {
+  contactId: string;
+  contactName: string;
+  companyName: string | null;
+  jobTitle: string | null;
+  ownerId: string;
+  rep: string;
+  activatedOn: string;
+  daysWaiting: number;
+  segmentId: number | null;
+  campaignId: number | null;
+};
+
+// Every current activated lead (no period: they're open follow-ups until a
+// deal exists), optionally only those activated inside `range`.
+export async function getActivatedLeads(
+  scope: { f: TeamFilter } | { segmentIds: number[] },
+  range?: DateRange,
+): Promise<ActivatedLead[]> {
+  if ("segmentIds" in scope && scope.segmentIds.length === 0) return [];
+  const who =
+    "f" in scope
+      ? sql`a.owner_id in (${teamOwnersSql(scope.f)})`
+      : sql`a.segment_id in (${sql.join(scope.segmentIds.map((id) => sql`${id}`), sql`, `)})`;
+  const day = TORONTO_DAY("a.activated_at");
+  const inRange = range ? sql`${day} between ${range.startDate} and ${range.endDate}` : sql`true`;
+  const rows = await db.execute<Record<string, unknown>>(sql`
+    select a.contact_id, a.contact_name, a.company_name, a.job_title, a.owner_id, coalesce(tm.name, a.owner_id) as rep,
+      ${day} as activated_on, extract(day from now() at time zone 'UTC' - a.activated_at)::int as days_waiting,
+      a.segment_id, (select s.campaign_id from segments s where s.id = a.segment_id) as campaign_id
+    from activated_leads a
+    left join team_members tm on tm.hubspot_owner_id = a.owner_id
+    where ${who} and ${inRange}
+    order by a.activated_at desc
+  `);
+  return rows.map((r) => ({
+    contactId: String(r.contact_id),
+    contactName: (r.contact_name as string) ?? "(no name)",
+    companyName: (r.company_name as string) ?? null,
+    jobTitle: (r.job_title as string) ?? null,
+    ownerId: String(r.owner_id),
+    rep: String(r.rep),
+    activatedOn: String(r.activated_on),
+    daysWaiting: Number(r.days_waiting ?? 0),
+    segmentId: r.segment_id == null ? null : Number(r.segment_id),
+    campaignId: r.campaign_id == null ? null : Number(r.campaign_id),
+  }));
 }

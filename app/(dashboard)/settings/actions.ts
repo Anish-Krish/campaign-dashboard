@@ -126,7 +126,24 @@ export async function saveNotificationSettings(formData: FormData) {
   await putSetting("teams_webhook_url", teams ?? null);
   await putSetting("email_from", str(formData, "emailFrom") ?? null);
   await putSetting("email_wins", formData.get("emailWins") === "on");
+  await putSetting("outcome_reminders", formData.get("outcomeReminders") === "on");
   revalidatePath("/settings");
+}
+
+export async function saveCommission(formData: FormData) {
+  await requireAdmin();
+  const num = (k: string, fallback: number) => {
+    const n = Number(str(formData, k));
+    return Number.isFinite(n) && n >= 0 ? n : fallback;
+  };
+  await putSetting("commission", {
+    visible: formData.get("visible") === "on",
+    base: num("base", 25),
+    threshold: Math.round(num("threshold", 10)),
+    high: num("high", 50),
+  });
+  revalidatePath("/settings");
+  revalidatePath("/team");
 }
 
 // Posts a test win to Teams + email so the setup can be checked end to end.

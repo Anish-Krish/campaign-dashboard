@@ -486,3 +486,30 @@ export const segmentLeadDays = pgTable(
   },
   (t) => [primaryKey({ columns: [t.segmentId, t.contactId, t.day] })],
 );
+
+// Activated leads (per the user): a contact whose Lead Status is "Open Deal"
+// but with no deal on the contact or its company yet. Credited to whoever set
+// the status (falls back to the contact owner); activatedAt = when it was set.
+// Rebuilt by every team sync, so a contact drops out once a deal exists.
+export const activatedLeads = pgTable("activated_leads", {
+  contactId: text("contact_id").primaryKey(),
+  companyId: text("company_id"),
+  ownerId: text("owner_id").notNull(),
+  segmentId: integer("segment_id"),
+  contactName: text("contact_name"),
+  companyName: text("company_name"),
+  jobTitle: text("job_title"),
+  activatedAt: timestamp("activated_at").notNull(),
+  syncedAt: timestamp("synced_at").notNull().defaultNow(),
+});
+
+// One row per intro meeting the BDR was emailed about (outcome still blank an
+// hour after the start time) — so each meeting is chased at most once.
+export const outcomeReminders = pgTable("outcome_reminders", {
+  meetingId: text("meeting_id").primaryKey(),
+  dealId: text("deal_id").notNull(),
+  ownerId: text("owner_id"),
+  sentTo: text("sent_to"),
+  error: text("error"),
+  sentAt: timestamp("sent_at").notNull().defaultNow(),
+});

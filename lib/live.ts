@@ -83,13 +83,13 @@ async function detectGoalHits(): Promise<LiveEvent[]> {
 
 // --- Notifications ------------------------------------------------------------------
 
-async function setting<T>(key: string): Promise<T | null> {
+export async function setting<T>(key: string): Promise<T | null> {
   const [row] = await db.select().from(appSettings).where(eq(appSettings.key, key));
   return (row?.value as T) ?? null;
 }
 
 const EMOJI: Record<string, string> = { meeting: "📅", bant: "🔥", goal: "🎯" };
-const appUrl = () => process.env.APP_URL ?? "https://campaign-dashboard-brown-two.vercel.app";
+export const appUrl = () => process.env.APP_URL ?? "https://campaign-dashboard-brown-two.vercel.app";
 
 async function postToTeams(url: string, e: LiveEvent) {
   // Teams "Workflows" webhook ("Post to a chat/channel when a webhook request
@@ -116,21 +116,31 @@ async function postToTeams(url: string, e: LiveEvent) {
   if (!res.ok) throw new Error(`Teams ${res.status}: ${(await res.text()).slice(0, 200)}`);
 }
 
-async function sendEmail(to: string[], e: LiveEvent) {
+export const escapeHtml = (s: string) =>
+  s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+
+// One email through Resend, from the Settings "Email from" address (Resend's
+// test sender until iwigroup.ca is verified there).
+export async function sendMail(to: string[], subject: string, html: string) {
   const key = process.env.RESEND_API_KEY;
-  if (!key || to.length === 0) return;
+  if (!key) throw new Error("RESEND_API_KEY not set");
+  if (to.length === 0) return;
   const from = (await setting<string>("email_from")) ?? "IWI Wins <onboarding@resend.dev>";
-  const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
-  const html = `<div style="font-family:system-ui,sans-serif;padding:8px">
-    <h2 style="margin:0 0 6px">${EMOJI[e.kind] ?? ""} ${esc(e.title)}</h2>
-    ${e.body ? `<p style="margin:0 0 14px;color:#555">${esc(e.body)}</p>` : ""}
-    <a href="${appUrl()}/team?scope=rep" style="color:#2f6fd0">Open the leaderboard</a></div>`;
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from, to, subject: `${EMOJI[e.kind] ?? ""} ${e.title}`, html }),
+    body: JSON.stringify({ from, to, subject, html }),
   });
   if (!res.ok) throw new Error(`Resend ${res.status}: ${(await res.text()).slice(0, 200)}`);
+}
+
+async function sendEmail(to: string[], e: LiveEvent) {
+  if (!process.env.RESEND_API_KEY || to.length === 0) return;
+  const html = `<div style="font-family:system-ui,sans-serif;padding:8px">
+    <h2 style="margin:0 0 6px">${EMOJI[e.kind] ?? ""} ${escapeHtml(e.title)}</h2>
+    ${e.body ? `<p style="margin:0 0 14px;color:#555">${escapeHtml(e.body)}</p>` : ""}
+    <a href="${appUrl()}/team?scope=rep" style="color:#2f6fd0">Open the leaderboard</a></div>`;
+  await sendMail(to, `${EMOJI[e.kind] ?? ""} ${e.title}`, html);
 }
 
 // Sends every win from the last day not yet notified. Chat messages stay in

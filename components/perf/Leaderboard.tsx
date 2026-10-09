@@ -145,6 +145,8 @@ export type LeaderRow = {
   sqls: number;
   dials: number;
   conversations: number;
+  // null = commission not shown (hidden by the admin, or not a month view)
+  commission: { total: number; atHigh: boolean; toNextTier: number } | null;
 };
 
 function Avatar({ name, leader }: { name: string; leader: boolean }) {
@@ -169,20 +171,28 @@ function Avatar({ name, leader }: { name: string; leader: boolean }) {
   );
 }
 
-function Mini({ label, value }: { label: string; value: string }) {
+function Mini({ label, value, title, accent }: { label: string; value: string; title?: string; accent?: boolean }) {
   return (
-    <div className="text-right">
+    <div className="text-right" title={title}>
       <div className="text-[11px] uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
         {label}
       </div>
-      <div className="text-[15px] font-semibold tabular-nums" style={{ color: "var(--text-primary)" }}>
+      <div className="text-[15px] font-semibold tabular-nums" style={{ color: accent ? "#5fd08f" : "var(--text-primary)" }}>
         {value}
       </div>
     </div>
   );
 }
 
-export function Leaderboard({ rows, periodLabel }: { rows: LeaderRow[]; periodLabel: string }) {
+export function Leaderboard({
+  rows,
+  periodLabel,
+  commissionNote,
+}: {
+  rows: LeaderRow[];
+  periodLabel: string;
+  commissionNote?: string | null;
+}) {
   // BANT meetings set decides the order (that's commission); ties go to more
   // meetings set, then more sat.
   const ranked = [...rows].sort(
@@ -198,6 +208,7 @@ export function Leaderboard({ rows, periodLabel }: { rows: LeaderRow[]; periodLa
         </h2>
         <span className="text-xs" style={{ color: "var(--text-muted)" }}>
           {periodLabel} · ranked by BANT meetings set · click a rep for their full view
+          {commissionNote ? ` · ${commissionNote}` : ""}
         </span>
       </div>
       {ranked.length === 0 && (
@@ -278,12 +289,24 @@ export function Leaderboard({ rows, periodLabel }: { rows: LeaderRow[]; periodLa
                   </span>
                 </span>
 
-                <span className="col-span-3 grid grid-cols-5 gap-4 md:col-span-1">
+                <span className={`col-span-3 grid gap-4 md:col-span-1 ${r.commission ? "grid-cols-6" : "grid-cols-5"}`}>
                   <Mini label="Set" value={String(r.meetingsSet)} />
                   <Mini label="Sat" value={String(r.sat)} />
                   <Mini label="Show" value={r.showRate == null ? "—" : `${r.showRate}%`} />
                   <Mini label="MQL" value={String(r.mqls)} />
                   <Mini label="SQL" value={String(r.sqls)} />
+                  {r.commission && (
+                    <Mini
+                      label="Earned"
+                      value={`$${r.commission.total.toLocaleString("en-US")}`}
+                      accent={r.commission.total > 0}
+                      title={
+                        r.commission.atHigh
+                          ? "On the higher rate"
+                          : `${r.commission.toNextTier} more BANT meeting${r.commission.toNextTier === 1 ? "" : "s"} to the higher rate`
+                      }
+                    />
+                  )}
                 </span>
               </Link>
             </li>

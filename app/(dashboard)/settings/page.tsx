@@ -3,11 +3,13 @@ import { asc } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { appSettings, owners, users } from "@/lib/db/schema";
 import { requireAdmin } from "@/lib/session";
+import { COMMISSION_DEFAULT, type CommissionConfig } from "@/lib/commission";
 import {
   addTeamMember,
   createUser,
   updateUser,
   saveNotificationSettings,
+  saveCommission,
   sendTestNotification,
   removeTeamMember,
   updateTeamMember,
@@ -34,6 +36,8 @@ export default async function SettingsPage() {
   const teamsUrl = (setting("teams_webhook_url") as string | null) ?? "";
   const emailFrom = (setting("email_from") as string | null) ?? "";
   const emailWins = (setting("email_wins") as boolean | null) ?? true;
+  const outcomeReminders = (setting("outcome_reminders") as boolean | null) ?? true;
+  const commission: CommissionConfig = { ...COMMISSION_DEFAULT, ...((setting("commission") as Partial<CommissionConfig> | null) ?? {}) };
   const withEmail = userRows.filter((u) => u.active && u.email).length;
   const resendReady = Boolean(process.env.RESEND_API_KEY);
 
@@ -166,7 +170,8 @@ export default async function SettingsPage() {
         <h2 className="mb-2 text-lg font-medium">Live notifications</h2>
         <p className="mb-4 text-sm" style={{ color: "var(--text-muted)" }}>
           Every meeting booked, BANT approved and goal hit is posted to Teams and emailed to every active login with an
-          email ({withEmail} right now). The live feed and sounds on the Leaderboard work without any of this.
+          email ({withEmail} right now). The live feed and sounds on the Leaderboard work without any of this. Outcome
+          reminders email the BDR an hour after an intro meeting if its HubSpot outcome is still blank.
         </p>
         <form action={saveNotificationSettings} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="sm:col-span-2">
@@ -197,6 +202,13 @@ export default async function SettingsPage() {
             <label className="flex items-center gap-2 pb-2 text-sm" style={labelStyle}>
               <input type="checkbox" name="emailWins" defaultChecked={emailWins} /> Email wins
             </label>
+            <label
+              className="flex items-center gap-2 pb-2 text-sm"
+              style={labelStyle}
+              title="An hour after an intro meeting starts, if its HubSpot outcome is still blank, email the BDR who booked it"
+            >
+              <input type="checkbox" name="outcomeReminders" defaultChecked={outcomeReminders} /> Outcome reminders
+            </label>
             <button type="submit" className="btn btn-primary px-4 py-2">
               Save
             </button>
@@ -204,6 +216,41 @@ export default async function SettingsPage() {
               Send test
             </button>
           </div>
+        </form>
+      </section>
+
+      <section className="rounded-lg border p-5" style={cardStyle}>
+        <h2 className="mb-2 text-lg font-medium">Commission</h2>
+        <p className="mb-4 text-sm" style={{ color: "var(--text-muted)" }}>
+          Paid per BANT meeting set in the month: the base rate up to the threshold, the higher rate for every meeting
+          after it. Shown on the Leaderboard and each rep&apos;s view. Untick &ldquo;Show to everyone&rdquo; to hide it
+          from reps (admins still see it).
+        </p>
+        <form action={saveCommission} className="grid grid-cols-2 items-end gap-4 sm:grid-cols-5">
+          <div>
+            <label className="mb-1 block text-xs" style={labelStyle}>
+              $ per meeting
+            </label>
+            <input name="base" type="number" min={0} step="any" defaultValue={commission.base} className={inputClass} />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs" style={labelStyle}>
+              Up to (meetings)
+            </label>
+            <input name="threshold" type="number" min={0} defaultValue={commission.threshold} className={inputClass} />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs" style={labelStyle}>
+              $ per meeting after
+            </label>
+            <input name="high" type="number" min={0} step="any" defaultValue={commission.high} className={inputClass} />
+          </div>
+          <label className="flex items-center gap-2 pb-2 text-sm" style={labelStyle}>
+            <input type="checkbox" name="visible" defaultChecked={commission.visible} /> Show to everyone
+          </label>
+          <button type="submit" className="btn btn-primary px-4 py-2">
+            Save
+          </button>
         </form>
       </section>
 

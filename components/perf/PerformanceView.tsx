@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { Booking, IntroAttempt } from "@/lib/team-queries";
+import type { ActivatedLead, Booking, IntroAttempt } from "@/lib/team-queries";
 
 // ---------------------------------------------------------------------------
 // Types (all plain data — the server page computes everything)
@@ -78,6 +78,7 @@ type Props = {
   bookings: Booking[];
   attempts: IntroAttempt[];
   attention: Booking[];
+  activatedLeads: ActivatedLead[]; // activated in this period
   range: { startDate: string; endDate: string };
   cohort: boolean;
 };
@@ -245,7 +246,7 @@ const COLUMNS: { key: string; label: string; cls?: string; title?: string; isKey
   { key: "dials", label: "Dials" },
   { key: "connects", label: "Connects", cls: "hidden lg:table-cell" },
   { key: "convos", label: "Convos", title: "Pitch / Past Pitch / Meeting outcomes" },
-  { key: "activated", label: "Activated", cls: "hidden md:table-cell", title: "Deal created, no meeting" },
+  { key: "activated", label: "Activated", cls: "hidden md:table-cell", title: "Contact set to Open Deal, no deal yet" },
   { key: "meetings", label: "Set", isKey: true, title: "Meetings set (booked)" },
   { key: "sat", label: "Sat", isKey: true, title: "Intro meetings that happened" },
   { key: "bant", label: "BANT", isKey: true },
@@ -329,7 +330,54 @@ const FLAG: Record<string, string> = {
   no_show_but_recorded: "Marked No-show / Canceled, but it was recorded",
 };
 
+type StageKey = "bant" | "mql" | "sql";
+const STAGE_INFO: Record<StageKey, { title: string; date: (b: Booking) => string | null; hint: string }> = {
+  bant: { title: "BANT", date: (b) => b.bantDate, hint: "BANT box ticked on the deal" },
+  mql: { title: "MQL", date: (b) => b.mqlDate, hint: "Deal entered Pre-Assessment / System Overview (or went straight to Sales)" },
+  sql: { title: "SQL", date: (b) => b.sqlDate, hint: "Deal entered the Sales Pipeline" },
+};
+
+export function ActivatedList({ rows, empty, showRep = true }: { rows: ActivatedLead[]; empty: string; showRep?: boolean }) {
+  if (rows.length === 0)
+    return (
+      <p className="py-10 text-center text-sm" style={{ color: "var(--text-muted)" }}>
+        {empty}
+      </p>
+    );
+  return (
+    <ul className="divide-y" style={{ borderColor: "var(--gridline)" }}>
+      {rows.map((a) => (
+        <li key={a.contactId} className="flex items-start justify-between gap-4 py-3" style={{ borderColor: "var(--gridline)" }}>
+          <div className="min-w-0">
+            <a
+              href={`https://app.hubspot.com/contacts/43446506/record/0-1/${a.contactId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block truncate text-sm font-medium hover:underline"
+              style={{ color: "var(--text-primary)" }}
+            >
+              {a.companyName ?? a.contactName}
+            </a>
+            <div className="mt-0.5 truncate text-xs" style={{ color: "var(--text-muted)" }}>
+              {a.contactName}
+              {a.jobTitle ? ` · ${a.jobTitle}` : ""}
+              {showRep ? ` · ${a.rep}` : ""} · activated {a.activatedOn}
+            </div>
+          </div>
+          <span
+            className="pill shrink-0"
+            style={{ ["--dot" as string]: a.daysWaiting >= 7 ? "var(--status-warning)" : "var(--accent)" }}
+          >
+            {a.daysWaiting === 0 ? "today" : `${a.daysWaiting}d`}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 type DrawerState =
+  | { kind: "stage"; stage: StageKey }
   | { kind: "actions"; tab: ActionTab }
   | { kind: "meetings" }
   | { kind: "shows"; tab: ShowTab }
@@ -341,7 +389,7 @@ const EVIDENCE_TITLE: Record<string, string> = {
   stage: "No recording or outcome, but the deal moved to Pre-Assessment or Sales",
 };
 
-function BookingList({ rows, empty, showWaiting }: { rows: Booking[]; empty: string; showWaiting?: boolean }) {
+export function BookingList({ rows, empty, showWaiting }: { rows: Booking[]; empty: string; showWaiting?: boolean }) {
   if (rows.length === 0)
     return (
       <p className="py-10 text-center text-sm" style={{ color: "var(--text-muted)" }}>
@@ -425,8 +473,7 @@ function Drawer({ state, onClose, props }: { state: DrawerState; onClose: () => 
   const needsOutcome = props.attention.filter((b) => b.meetingStatus === "not_logged");
   const needsRebook = props.attention.filter((b) => b.meetingStatus === "needs_rebook");
   const toCheck = props.attention.filter((b) => b.checkFlag);
-  const inRange = (b: Booking) => b.bookedOn >= props.range.startDate && b.bookedOn <= props.range.endDate;
-  const activated = props.bookings.filter((b) => b.meetingStatus === "no_meeting" && inRange(b));
+  const activated = props.activatedLeads;
 
   let title = "";
   let body: React.ReactNode = null;
@@ -469,12 +516,31 @@ function Drawer({ state, onClose, props }: { state: DrawerState; onClose: () => 
             </>
           ) : (
             <>
-              <Hint>BDR created a deal but there&apos;s no meeting yet (this period).</Hint>
-              <BookingList rows={activated} empty="No activated leads this period." />
+              <Hint>
+                Contact set to Lead Status &ldquo;Open Deal&rdquo; this period, with no deal yet. Book the meeting (create
+                the deal) to clear it.
+              </Hint>
+              <ActivatedList rows={activated} empty="No activated leads this period." />
             </>
           )
         }
       />
+    );
+  } else if (state.kind === "stage") {
+    const info = STAGE_INFO[state.stage];
+    const inPeriod = (d: string | null) => d != null && d >= props.range.startDate && d <= props.range.endDate;
+    const rows = props.bookings
+      .filter((b) => (props.cohort ? info.date(b) != null : inPeriod(info.date(b))))
+      .sort((a, b) => (info.date(b) ?? "").localeCompare(info.date(a) ?? ""));
+    title = `${info.title} · ${rows.length}`;
+    body = (
+      <>
+        <Hint>
+          {info.hint}.{" "}
+          {props.cohort ? "Of the meetings set in this period, whenever it happened." : "Happened in this period, whenever the meeting was booked."}
+        </Hint>
+        <BookingList rows={rows} empty={`No ${info.title} in this period.`} />
+      </>
     );
   } else if (state.kind === "meetings") {
     title = props.cohort ? "Meetings set this period" : "Deals this period";
@@ -721,9 +787,27 @@ export function PerformanceView(props: Props) {
             {k.needsRebook} rebook · {k.rebooked} rebooked · {k.lost} lost
           </span>
         </Tile>
-        <Tile label="BANT" value={fmt(k.bant)} delta={p && <Delta now={k.bant} prev={p.bant} label={deltaLabel} />} />
-        <Tile label="MQL" value={fmt(k.mqls)} delta={p && <Delta now={k.mqls} prev={p.mqls} label={deltaLabel} />} />
-        <Tile label="SQL" value={fmt(k.sqls)} delta={p && <Delta now={k.sqls} prev={p.sqls} label={deltaLabel} />} />
+        <Tile
+          label="BANT"
+          value={fmt(k.bant)}
+          delta={p && <Delta now={k.bant} prev={p.bant} label={deltaLabel} />}
+          onClick={() => setDrawer({ kind: "stage", stage: "bant" })}
+          title="Click for the BANT meetings"
+        />
+        <Tile
+          label="MQL"
+          value={fmt(k.mqls)}
+          delta={p && <Delta now={k.mqls} prev={p.mqls} label={deltaLabel} />}
+          onClick={() => setDrawer({ kind: "stage", stage: "mql" })}
+          title="Click for the MQLs"
+        />
+        <Tile
+          label="SQL"
+          value={fmt(k.sqls)}
+          delta={p && <Delta now={k.sqls} prev={p.sqls} label={deltaLabel} />}
+          onClick={() => setDrawer({ kind: "stage", stage: "sql" })}
+          title="Click for the SQLs"
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

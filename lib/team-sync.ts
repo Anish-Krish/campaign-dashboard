@@ -10,6 +10,7 @@ import {
   type SearchFilter,
 } from "@/lib/hubspot";
 import { toTorontoDateStr, todayInToronto } from "@/lib/timezone";
+import { syncActivatedLeads } from "@/lib/activated";
 
 // Portal-specific pipeline/stage IDs, verified live via GET /crm/v3/pipelines/deals.
 const MARKETING_PIPELINE_ID = "62788164";
@@ -225,7 +226,7 @@ function attemptResult(m: Meeting, priorOutcomes: string[], nowMs: number): { re
 //    often leave the outcome at Scheduled), and its last past attempt is
 //    counted as the one that sat.
 //  - Otherwise the LATEST attempt decides: a no-show / cancel is LOST when
-//    the deal is closed lost or the company is marked Not Interested, else
+//    the deal is closed lost or its company or contact is Not Interested, else
 //    NEEDS REBOOK — until a BDR rebooks it (outcome -> Rescheduled, or a new
 //    meeting). Future -> scheduled; past with no outcome -> not_logged.
 // The check: Completed with no recording, or a recorded meeting marked
@@ -410,6 +411,11 @@ async function processTeamDeals(dealIds: string[], { sinceDay, prune }: { sinceD
     "hs_lead_status",
     "stage",
   ]);
+  // ...and so does a deal contact whose own Lead Status is Not Interested.
+  const contactRecords = await batchReadObjects<{ hs_lead_status?: string }>("contacts", contactIds, ["hs_lead_status"]);
+  const notInterestedContacts = new Set(
+    contactRecords.filter((c) => /not[_ ]interested/i.test(c.properties.hs_lead_status ?? "")).map((c) => c.id),
+  );
   const notInterestedCompanies = new Set(
     companyRecords
       .filter((c) => /not[_ ]interested/i.test(c.properties.hs_lead_status ?? "") || /not interested/i.test(c.properties.stage ?? ""))
@@ -474,7 +480,8 @@ async function processTeamDeals(dealIds: string[], { sinceDay, prune }: { sinceD
     const lost =
       p.dealstage === MARKETING_CLOSED_LOST ||
       p.dealstage === "closedlost" ||
-      (dealToCompanies.get(d.id) ?? []).some((c) => notInterestedCompanies.has(c));
+      (dealToCompanies.get(d.id) ?? []).some((c) => notInterestedCompanies.has(c)) ||
+      (dealToContacts.get(d.id) ?? []).some((c) => notInterestedContacts.has(c));
     const derived = deriveIntro(introCandidates, outcomeHistory, Boolean(mqlDate || sqlDate), lost, nowMs);
     const meetingStatus = derived.status;
     const statusSinceMs = derived.sinceMs;
@@ -594,5 +601,6 @@ export async function runTeamSync() {
   const today = todayInToronto();
   const callResult = await syncTeamCalls(addDays(today, -2), today);
   const dealResult = await syncTeamDeals(`${Number(today.slice(0, 4)) - 1}-01-01`);
-  return { ...callResult, ...dealResult };
+  const activatedResult = await syncActivatedLeads();
+  return { ...callResult, ...dealResult, ...activatedResult };
 }

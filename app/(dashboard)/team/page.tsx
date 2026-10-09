@@ -6,9 +6,12 @@ import { GoalProgress, Leaderboard, type LeaderRow } from "@/components/perf/Lea
 import { RefreshButton } from "@/components/perf/RefreshButton";
 import { RepPicker } from "@/components/perf/RepPicker";
 import { LiveFeed } from "@/components/live/LiveFeed";
+import { FollowUps } from "@/components/perf/FollowUps";
+import { commissionFor, getCommissionConfig, money } from "@/lib/commission";
 import { PerformanceView, type BreakdownRow, type Kpis, type Stage } from "@/components/perf/PerformanceView";
 import {
   ALL_BDRS,
+  getActivatedLeads,
   getBookingsForSegments,
   getIntroAttempts,
   getNeedsAttention,
@@ -42,10 +45,11 @@ export const maxDuration = 300;
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const MON = MONTHS.map((m) => m.slice(0, 3));
 
-type Scope = "total" | "rep" | "campaign" | "segment";
+type Scope = "total" | "rep" | "follow" | "campaign" | "segment";
 const SCOPES: { key: Scope; label: string }[] = [
   { key: "total", label: "Total" },
   { key: "rep", label: "Leaderboard" },
+  { key: "follow", label: "Follow-ups" },
   { key: "campaign", label: "Campaigns" },
   { key: "segment", label: "Segments" },
 ];
@@ -160,7 +164,7 @@ export default async function TeamPage({
 }) {
   const sp = await searchParams;
   const today = todayInToronto();
-  const [user, members, campaignRows, [lastRun]] = await Promise.all([
+  const [user, members, campaignRows, [lastRun], commissionCfg] = await Promise.all([
     getCurrentUser(),
     getTeamMembers(),
     db.select({ id: bdrCampaigns.id, name: bdrCampaigns.name }).from(bdrCampaigns),
@@ -170,6 +174,7 @@ export default async function TeamPage({
       .where(eq(syncRuns.status, "success"))
       .orderBy(desc(syncRuns.id))
       .limit(1),
+    getCommissionConfig(),
   ]);
   // Team = every BDR, current and former, so MQLs/SQLs from former reps'
   // bookings still count (per the user). The rep picker narrows the whole
@@ -177,8 +182,9 @@ export default async function TeamPage({
   const group = ALL_BDRS;
   const scopeParam: Scope = SCOPES.some((x) => x.key === str(sp.scope)) ? (str(sp.scope) as Scope) : "total";
   const leaderboard = scopeParam === "rep";
+  const followUps = scopeParam === "follow";
   const focusRep = leaderboard ? null : (members.find((m) => m.hubspotOwnerId === str(sp.rep)) ?? null);
-  const focusCampaign = leaderboard ? null : (campaignRows.find((c) => String(c.id) === str(sp.campaign)) ?? null);
+  const focusCampaign = leaderboard || followUps ? null : (campaignRows.find((c) => String(c.id) === str(sp.campaign)) ?? null);
   const f: TeamFilter = { group, ownerId: focusRep?.hubspotOwnerId };
 
   // "When it happened" (default) vs "When it was booked" (the history view:
@@ -234,9 +240,11 @@ export default async function TeamPage({
     getOutsideSegmentDeals(range, f),
   ]);
   const segIds = segRows.map((r) => r.segmentId);
-  const [bookings, attempts] = await Promise.all([
+  const [bookings, attempts, activatedLeads, openActivated] = await Promise.all([
     segScope ? getBookingsForSegments(segIds, range, mode) : getTeamBookings(range, f, mode),
     getIntroAttempts(range, segScope ? { segmentIds: segIds } : { f }, mode),
+    getActivatedLeads(segScope ? { segmentIds: segIds } : { f }, range),
+    followUps ? getActivatedLeads({ f }) : Promise.resolve([]),
   ]);
 
   // --- KPIs + funnel ---------------------------------------------------------
@@ -274,7 +282,7 @@ export default async function TeamPage({
       tone: "neutral",
       ofValue: convos,
       ofLabel: "conversations",
-      hint: "Deal created, no meeting",
+      hint: "Contact set to Open Deal, no deal yet",
     },
     { label: "Meetings set", value: kpis.meetings, ofValue: convos, ofLabel: "conversations" },
     cohort
@@ -376,7 +384,7 @@ export default async function TeamPage({
         total: totalRow,
       };
     }
-  } else if (scope === "rep") {
+  } else if (scope === "rep" || scope === "follow") {
     // The leaderboard renders its own component (below); the table is unused.
     table = { title: "", firstCol: "", rows: [], total: null };
   } else {
@@ -447,6 +455,9 @@ export default async function TeamPage({
       />
     ) : null;
 
+  // Commission tiers are monthly, so it's shown on the Month view only.
+  const showCommission = view === "month" && (commissionCfg.visible || isAdmin);
+  const commissionOf = (bant: number) => (showCommission ? commissionFor(bant, commissionCfg) : null);
   const leaderRows: LeaderRow[] = stats.reps
     .filter((r) => repsInPeriod.some((m) => m.hubspotOwnerId === r.ownerId))
     .map((r) => ({
@@ -462,7 +473,15 @@ export default async function TeamPage({
       sqls: r.sqls,
       dials: r.dials,
       conversations: r.conversations,
+      commission: commissionOf(r.bant),
     }));
+  const teamCommission = leaderRows.reduce((n, r) => n + (r.commission?.total ?? 0), 0);
+  const repCommission = focusRep ? commissionOf(stats.reps.find((r) => r.ownerId === focusRep.hubspotOwnerId)?.bant ?? 0) : null;
+  const commissionNote = showCommission
+    ? `${money(commissionCfg.base)} per BANT meeting, ${money(commissionCfg.high)} after ${commissionCfg.threshold}${
+        commissionCfg.visible ? "" : " · hidden from reps"
+      }`
+    : null;
 
   // --- Rep picker -----------------------------------------------------------------
   const pickScope = leaderboard ? "total" : scopeParam;
@@ -526,7 +545,7 @@ export default async function TeamPage({
             </Link>
           </nav>
         )}
-        {!leaderboard && (
+        {!leaderboard && !followUps && (
           <nav className="seg" aria-label="Counted by">
             <Link
               href={href({ count: "happened" })}
@@ -544,6 +563,7 @@ export default async function TeamPage({
             </Link>
           </nav>
         )}
+        {!followUps && (
         <nav className="seg" aria-label="Period">
           <Link href={href({ view: "month", month })} aria-current={view === "month"}>
             Month
@@ -562,7 +582,8 @@ export default async function TeamPage({
             Custom
           </Link>
         </nav>
-        {view === "custom" ? (
+        )}
+        {followUps ? null : view === "custom" ? (
           <form action="/team" method="get" className="flex items-center gap-2">
             {Object.entries({ ...base, ...focusParams })
               .filter(([k]) => k !== "from" && k !== "to")
@@ -589,9 +610,25 @@ export default async function TeamPage({
             </Link>
           </div>
         )}
+        {followUps && (
+          <span className="text-sm" style={{ color: "var(--text-muted)" }}>
+            Open right now · not tied to a period
+          </span>
+        )}
       </div>
 
-      {leaderboard ? (
+      {followUps ? (
+        <FollowUps
+          attention={attention}
+          activated={openActivated}
+          focused={Boolean(focusRep)}
+          reps={currentReps.map((m) => ({
+            ownerId: m.hubspotOwnerId,
+            name: m.name,
+            href: build({ ...base, scope: "follow", rep: m.hubspotOwnerId }),
+          }))}
+        />
+      ) : leaderboard ? (
         <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
           <div className="min-w-0 space-y-6">
           <GoalProgress
@@ -607,9 +644,10 @@ export default async function TeamPage({
               { label: "Show rate", value: t.showRate == null ? "—" : `${t.showRate}%` },
               { label: "MQL", value: String(t.mqls) },
               { label: "SQL", value: String(t.sqls) },
+              ...(showCommission ? [{ label: "Commission", value: money(teamCommission) }] : []),
             ]}
           />
-          <Leaderboard rows={leaderRows} periodLabel={periodLabel} />
+          <Leaderboard rows={leaderRows} periodLabel={periodLabel} commissionNote={commissionNote} />
           </div>
           <div className="xl:sticky xl:top-20">
             <LiveFeed />
@@ -625,7 +663,17 @@ export default async function TeamPage({
               pace={pace}
               daysLeft={daysLeft}
               editor={editor}
-              stats={[]}
+              stats={
+                repCommission
+                  ? [
+                      { label: "Commission", value: money(repCommission.total) },
+                      {
+                        label: repCommission.atHigh ? "Rate" : `To ${money(commissionCfg.high)} rate`,
+                        value: repCommission.atHigh ? `${money(commissionCfg.high)}/mtg` : `${repCommission.toNextTier} more`,
+                      },
+                    ]
+                  : []
+              }
             />
           )}
       <PerformanceView
@@ -638,6 +686,7 @@ export default async function TeamPage({
         bookings={bookings}
         attempts={attempts}
         attention={attention}
+        activatedLeads={activatedLeads}
         range={range}
         cohort={cohort}
       />
