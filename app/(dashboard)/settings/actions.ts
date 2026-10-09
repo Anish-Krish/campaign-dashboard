@@ -3,134 +3,13 @@
 import { requireAdmin } from "@/lib/session";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
-import { appSettings, campaigns, liveEvents, owners, teamMembers, users } from "@/lib/db/schema";
+import { appSettings, liveEvents, owners, teamMembers, users } from "@/lib/db/schema";
 import { hashPassword } from "@/lib/passwords";
 import { eq } from "drizzle-orm";
-import { setAuthorityKeywords } from "@/lib/authority";
-import { runSyncJob } from "@/lib/sync";
-
-// Best-effort — a campaign save should never fail just because the
-// immediately-following sync hit a problem (bad list ID, HubSpot hiccup,
-// etc.); the dashboard's error banner already surfaces that separately.
-async function syncCampaignSafely(campaignId: number) {
-  try {
-    await runSyncJob({ campaignIds: [campaignId] });
-  } catch (err) {
-    console.error(`[settings] post-save sync failed for campaign ${campaignId}:`, err);
-  }
-}
 
 function str(formData: FormData, key: string): string | null {
   const v = formData.get(key);
   return typeof v === "string" && v.trim() !== "" ? v.trim() : null;
-}
-
-export async function createCampaign(formData: FormData) {
-  await requireAdmin();
-  const name = str(formData, "name");
-  const hubspotListId = str(formData, "hubspotListId");
-  if (!name || !hubspotListId) return;
-
-  const [created] = await db
-    .insert(campaigns)
-    .values({
-      name,
-      hubspotListId,
-      sequenceLabel: str(formData, "sequenceLabel"),
-      ownerName: str(formData, "ownerName"),
-      ownerEmail: str(formData, "ownerEmail"),
-      targetCount: str(formData, "targetCount") ? Number(str(formData, "targetCount")) : null,
-      startDate: str(formData, "startDate"),
-      endDate: str(formData, "endDate"),
-    })
-    .returning();
-
-  await syncCampaignSafely(created.id);
-
-  revalidatePath("/settings");
-  revalidatePath("/campaigns");
-  revalidatePath("/");
-}
-
-export async function updateCampaignStatus(formData: FormData) {
-  await requireAdmin();
-  const id = Number(formData.get("id"));
-  const status = str(formData, "status");
-  if (!id || !status) return;
-
-  await db.update(campaigns).set({ status }).where(eq(campaigns.id, id));
-
-  revalidatePath("/settings");
-  revalidatePath("/campaigns");
-  revalidatePath("/");
-}
-
-export async function updateCampaign(formData: FormData) {
-  await requireAdmin();
-  const id = Number(formData.get("id"));
-  const name = str(formData, "name");
-  const hubspotListId = str(formData, "hubspotListId");
-  if (!id || !name || !hubspotListId) return;
-
-  await db
-    .update(campaigns)
-    .set({
-      name,
-      hubspotListId,
-      sequenceLabel: str(formData, "sequenceLabel"),
-      ownerName: str(formData, "ownerName"),
-      ownerEmail: str(formData, "ownerEmail"),
-      targetCount: str(formData, "targetCount") ? Number(str(formData, "targetCount")) : null,
-      startDate: str(formData, "startDate"),
-      endDate: str(formData, "endDate"),
-      status: str(formData, "status") ?? "active",
-    })
-    .where(eq(campaigns.id, id));
-
-  await syncCampaignSafely(id);
-
-  revalidatePath("/settings");
-  revalidatePath("/campaigns");
-  revalidatePath("/");
-}
-
-export async function deleteCampaign(formData: FormData) {
-  await requireAdmin();
-  const id = Number(formData.get("id"));
-  if (!id) return;
-
-  await db.delete(campaigns).where(eq(campaigns.id, id));
-
-  revalidatePath("/settings");
-  revalidatePath("/campaigns");
-  revalidatePath("/");
-}
-
-// isAuthority is computed and stored per contact at sync time (see
-// isAuthorityTitle in lib/sync.ts), not derived live from the keyword list —
-// so without a resync here, saving new keywords would silently do nothing
-// until whatever campaign happened to sync next. Runs across every campaign
-// (best-effort, same as syncCampaignSafely above) since a keyword change can
-// reclassify contacts anywhere.
-export async function saveAuthorityKeywords(formData: FormData) {
-  await requireAdmin();
-  const raw = str(formData, "keywords") ?? "";
-  const keywords = raw
-    .split(",")
-    .map((k) => k.trim())
-    .filter(Boolean);
-
-  await setAuthorityKeywords(keywords);
-
-  try {
-    await runSyncJob();
-  } catch (err) {
-    console.error("[settings] post-keyword-save resync failed:", err);
-  }
-
-  revalidatePath("/settings");
-  revalidatePath("/campaigns");
-  revalidatePath("/");
 }
 
 // --- Team members -------------------------------------------------------------
