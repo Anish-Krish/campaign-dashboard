@@ -19,9 +19,8 @@ import {
 
 export const dynamic = "force-dynamic";
 
-const inputClass =
-  "w-full rounded border bg-transparent px-3 py-2 text-sm outline-none focus:border-blue-500";
-const inputStyle = { borderColor: "var(--border-hairline)", color: "var(--text-primary)" };
+const inputClass = "input";
+const inputStyle = {};
 const cardStyle = { background: "var(--chart-surface)", borderColor: "var(--border-hairline)" };
 const labelStyle = { color: "var(--text-secondary)" };
 
@@ -58,7 +57,7 @@ export default async function SettingsPage() {
               <input type="hidden" name="id" value={u.id} />
               <div>
                 <label className="mb-1 block text-xs" style={labelStyle}>
-                  Name <span style={{ color: "var(--text-muted)" }}>({u.username})</span>
+                  Name · login <span style={{ color: "var(--text-primary)" }}>{u.username}</span>
                 </label>
                 <input name="name" defaultValue={u.name} className={inputClass} style={inputStyle} />
               </div>
@@ -94,7 +93,7 @@ export default async function SettingsPage() {
                 <label className="flex items-center gap-1 text-xs" style={labelStyle}>
                   <input type="checkbox" name="active" defaultChecked={u.active} disabled={u.id === me.id} /> Active
                 </label>
-                <button type="submit" className="rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500">
+                <button type="submit" className="btn btn-primary px-3 py-2">
                   Save
                 </button>
               </div>
@@ -143,7 +142,7 @@ export default async function SettingsPage() {
             <input name="password" required className={inputClass} style={inputStyle} />
           </div>
           <div>
-            <button type="submit" className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500">
+            <button type="submit" className="btn btn-primary px-4 py-2">
               Create login
             </button>
           </div>
@@ -209,7 +208,7 @@ export default async function SettingsPage() {
                 <input name="endDate" type="date" defaultValue={m.endDate ?? ""} className={inputClass} style={inputStyle} />
               </div>
               <div className="flex gap-2">
-                <button type="submit" className="rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500">
+                <button type="submit" className="btn btn-primary px-3 py-2">
                   Save
                 </button>
                 <button
@@ -265,7 +264,7 @@ export default async function SettingsPage() {
             <input name="startDate" type="date" className={inputClass} style={inputStyle} />
           </div>
           <div>
-            <button type="submit" className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500">
+            <button type="submit" className="btn btn-primary px-4 py-2">
               Add to team
             </button>
           </div>
@@ -326,7 +325,7 @@ export default async function SettingsPage() {
           <div className="sm:col-span-2">
             <button
               type="submit"
-              className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500"
+              className="btn btn-primary px-4 py-2"
             >
               Add campaign
             </button>
@@ -475,7 +474,7 @@ export default async function SettingsPage() {
                 <div className="sm:col-span-2 flex items-center gap-2">
                   <button
                     type="submit"
-                    className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500"
+                    className="btn btn-primary px-4 py-2"
                   >
                     Save changes
                   </button>
@@ -513,7 +512,7 @@ export default async function SettingsPage() {
           />
           <button
             type="submit"
-            className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 sm:self-start"
+            className="btn btn-primary px-4 py-2 sm:self-start"
           >
             Save
           </button>

@@ -318,10 +318,15 @@ export const teamDeals = pgTable("team_deals", {
   meetingId: text("meeting_id"),
   meetingAt: timestamp("meeting_at"),
   // held | needs_rebook | no_show_lost | cancelled_lost | scheduled | not_logged | no_meeting
-  // From the deal's "Intro Meeting Status" when set (statusSource = hubspot),
-  // else inferred from meeting records (auto) — see lib/team-sync.ts.
+  // From the HubSpot meeting records (outcome + notetaker recording) and the
+  // deal stage — see lib/team-sync.ts.
   meetingStatus: text("meeting_status").notNull(),
+  // why it's held: recorded | outcome | stage; "auto" for every other status
   statusSource: text("status_source").notNull().default("auto"),
+  // held/no-show check: completed_not_recorded | no_show_but_recorded | null
+  checkFlag: text("check_flag"),
+  meetingSummary: text("meeting_summary"), // HubSpot notetaker AI summary of the intro (HTML)
+  recordingMinutes: integer("recording_minutes"),
   statusSince: timestamp("status_since"), // when it went needs_rebook / lost — powers "days waiting"
   rebooked: boolean("rebooked").notNull().default(false),
   // Deal "Source Group" (BDR | Marketing | Sage | Sales Team, set by a HubSpot
@@ -334,9 +339,41 @@ export const teamDeals = pgTable("team_deals", {
   mqlDate: date("mql_date"),
   sqlDate: date("sql_date"),
   bant: boolean("bant").notNull().default(false),
+  bantDate: date("bant_date"), // Toronto day the BANT box was ticked (never before the booking)
   closedWon: boolean("closed_won").notNull().default(false),
   lastSyncedAt: timestamp("last_synced_at").notNull().defaultNow(),
 });
+
+// Monthly BANT-meeting goals. ownerId '' = the team goal; a rep row overrides
+// that rep's share (otherwise the team goal is split evenly across the
+// leaderboard reps active that month — see lib/goals.ts).
+export const goals = pgTable(
+  "goals",
+  {
+    month: text("month").notNull(), // YYYY-MM
+    ownerId: text("owner_id").notNull().default(""),
+    target: integer("target").notNull(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.month, t.ownerId] })],
+);
+
+// Every intro-meeting attempt per booked deal, up to and including the one
+// that sat — powers "meetings sat" and show rate by MEETING date (vs. the
+// deal-level status, which is about the booking). result: sat | no_show |
+// canceled | rescheduled | scheduled | not_logged. rebooked = a miss that was
+// followed by a new meeting or switched to Rescheduled by the BDR.
+export const teamIntroMeetings = pgTable(
+  "team_intro_meetings",
+  {
+    dealId: text("deal_id").notNull(),
+    meetingId: text("meeting_id").notNull(),
+    meetingAt: timestamp("meeting_at").notNull(),
+    result: text("result").notNull(),
+    rebooked: boolean("rebooked").notNull().default(false),
+  },
+  (t) => [primaryKey({ columns: [t.dealId, t.meetingId] })],
+);
 
 // --- Users ----------------------------------------------------------------------
 // Per-person logins (replacing the single shared password). role "admin" sees
@@ -399,4 +436,21 @@ export const segmentLeads = pgTable(
     conversation: boolean("conversation").notNull().default(false),
   },
   (t) => [primaryKey({ columns: [t.segmentId, t.contactId] })],
+);
+
+// Per-day call activity behind segment_leads, so segment/campaign numbers can
+// be cut to any period (month, year, custom) instead of the whole window.
+export const segmentLeadDays = pgTable(
+  "segment_lead_days",
+  {
+    segmentId: integer("segment_id")
+      .notNull()
+      .references(() => segments.id, { onDelete: "cascade" }),
+    contactId: text("contact_id").notNull(),
+    day: date("day").notNull(),
+    calls: integer("calls").notNull().default(0),
+    connected: boolean("connected").notNull().default(false),
+    conversation: boolean("conversation").notNull().default(false),
+  },
+  (t) => [primaryKey({ columns: [t.segmentId, t.contactId, t.day] })],
 );

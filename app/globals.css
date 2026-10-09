@@ -19,6 +19,7 @@
 
   --accent: #5598e7;
   --accent-soft: rgba(85, 152, 231, 0.14);
+  --key-col: rgba(85, 152, 231, 0.06);
 
   /* funnel ordinal ramp (light -> dark = earlier -> later stage) */
   --ramp-1: #b7d3f6;
@@ -203,6 +204,25 @@ body {
 .data-table tbody tr.clickable:hover td {
   background: var(--surface-2);
 }
+.data-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.data-table th.sortable:hover {
+  color: var(--text-primary);
+}
+/* Headline metrics (Meetings / BANT / MQL / SQL) */
+.data-table th.key {
+  color: var(--text-secondary);
+}
+.data-table td.key {
+  color: var(--text-primary);
+  font-weight: 600;
+  background: var(--key-col);
+}
+.data-table tbody tr.clickable:hover td.key {
+  background: var(--surface-2);
+}
 .data-table tfoot td {
   color: var(--text-primary);
   font-weight: 500;
@@ -240,6 +260,17 @@ body {
   color: var(--text-primary);
   padding: 8px 10px;
   font-size: 13px;
+}
+/* Native dropdown menus: without this Windows renders the option list white
+   while the text stays light, so names are invisible until highlighted. */
+select {
+  background-color: var(--background);
+  color: var(--text-primary);
+}
+select option,
+select optgroup {
+  background-color: var(--surface);
+  color: var(--text-primary);
 }
 input:focus,
 select:focus,

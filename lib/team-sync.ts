@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
-import { teamCallDaily, teamDeals } from "@/lib/db/schema";
-import { and, eq, gte, notInArray, sql } from "drizzle-orm";
+import { teamCallDaily, teamDeals, teamIntroMeetings } from "@/lib/db/schema";
+import { and, eq, gte, inArray, notInArray, sql } from "drizzle-orm";
 import {
   batchReadAssociations,
   batchReadObjects,
@@ -30,16 +30,22 @@ const MQL_STAGES = new Set([
   "closedlost", // Sales Pipeline's closed lost (Marketing's is 123017108)
 ]);
 
-// Intro Meeting Status (deal property `intro_meeting_status`, created for this
-// dashboard): set by hand after each intro meeting. These four are final
-// answers and always win over anything inferred from meeting records.
-const MANUAL_FINAL_STATUSES = new Set(["held", "needs_rebook", "no_show_lost", "cancelled_lost"]);
+// Marketing Pipeline "Closed lost": a missed intro on a closed-lost deal is a
+// lost meeting, not one waiting on a rebook.
+const MARKETING_CLOSED_LOST = "123017108";
+
+// HubSpot's notetaker records most intro meetings (transcript + AI summary).
+// A recording with real length is proof the meeting happened — the held /
+// no-show check. Shorter than this = the bot sat in an empty room.
+const MIN_RECORDED_MS = 5 * 60 * 1000;
 
 // How far before a deal's creation a contact's meeting can have been created
 // and still count as that deal's intro meeting — BDRs book the meeting first
 // and create the deal minutes-to-days later (e.g. Globe Printers: meeting
 // 19:09, deal 19:12, and the meeting was never associated to the deal).
 const MEETING_LOOKBACK_MS = 14 * 24 * 60 * 60 * 1000;
+// Latest an intro attempt (incl. rebooks) can be after the booking.
+const INTRO_WINDOW_MS = 60 * 24 * 60 * 60 * 1000;
 
 function chunkArray<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -138,7 +144,6 @@ type DealProps = {
   bant_qualified?: string;
   source_group?: string;
   source?: string;
-  intro_meeting_status?: string;
 };
 
 type MeetingProps = {
@@ -146,7 +151,19 @@ type MeetingProps = {
   hs_createdate?: string;
   hs_meeting_outcome?: string;
   hs_meeting_title?: string;
+  hs_has_meeting_transcript?: string;
+  hs_meeting_recording_duration?: string;
+  hs_meeting_summary?: string;
 };
+const MEETING_PROPS = [
+  "hs_timestamp",
+  "hs_createdate",
+  "hs_meeting_outcome",
+  "hs_meeting_title",
+  "hs_has_meeting_transcript",
+  "hs_meeting_recording_duration",
+  "hs_meeting_summary",
+];
 
 // Source Group is filled by a HubSpot workflow (seen as AUTOMATION_PLATFORM
 // in its history); if it's ever blank, ZoomInfo / 6Sense sourced deals are
@@ -168,35 +185,103 @@ export type MeetingStatus =
   | "no_meeting";
 
 type Meeting = MeetingProps & { id: string };
+// HubSpot's notetaker was in use from Sep 2026 — before that, "Completed but
+// not recorded" is normal and not worth flagging.
+const RECORDING_ERA_MS = Date.parse("2026-09-01T04:00:00Z");
 const byTimeAsc = (a: Meeting, b: Meeting) => Date.parse(a.hs_timestamp ?? "") - Date.parse(b.hs_timestamp ?? "");
 
-// Fallback status when nobody has set Intro Meeting Status yet:
-//  - any candidate meeting COMPLETED, or the deal reached MQL/SQL -> held.
-//    The progression rule matters: AEs often leave the intro meeting's
-//    outcome at "Scheduled" even after it clearly happened (e.g. Stallergenes
-//    Greer became an SQL with its intro still marked Scheduled).
-//  - otherwise the LATEST candidate meeting decides: no-show / canceled ->
-//    needs_rebook (only a person can say it's lost); still scheduled in the
-//    future -> scheduled; in the past -> not_logged (outcome never recorded —
-//    surfaced in "Needs attention").
-function deriveMeetingStatus(meetings: Meeting[], progressed: boolean, nowMs: number) {
-  if (meetings.some((m) => m.hs_meeting_outcome === "COMPLETED") || progressed) {
-    return { status: "held" as MeetingStatus, sinceMs: null };
+function isRecorded(m: Meeting): boolean {
+  const ms = Number(m.hs_meeting_recording_duration ?? 0);
+  return ms >= MIN_RECORDED_MS || (m.hs_has_meeting_transcript === "true" && !(ms > 0 && ms < MIN_RECORDED_MS));
+}
+// One intro-meeting attempt's result. "Sat" = recorded by the notetaker or
+// outcome Completed. A meeting marked No show / Canceled that a BDR later
+// switched to Rescheduled (their "rebooked" signal, per the user) keeps its
+// original miss — read from the outcome's history — so show rate can't be
+// improved by editing the outcome; it's just flagged as rebooked. A meeting
+// only ever marked Rescheduled was moved before it happened and doesn't count
+// for or against show rate.
+export type AttemptResult = "sat" | "no_show" | "canceled" | "rescheduled" | "scheduled" | "not_logged";
+
+function attemptResult(m: Meeting, priorOutcomes: string[], nowMs: number): { result: AttemptResult; rebooked: boolean } {
+  const outcome = m.hs_meeting_outcome ?? "";
+  if (isRecorded(m) || outcome === "COMPLETED") return { result: "sat", rebooked: false };
+  if (outcome === "NO_SHOW") return { result: "no_show", rebooked: false };
+  if (outcome === "CANCELED") return { result: "canceled", rebooked: false };
+  if (outcome === "RESCHEDULED") {
+    if (priorOutcomes.includes("NO_SHOW")) return { result: "no_show", rebooked: true };
+    if (priorOutcomes.includes("CANCELED")) return { result: "canceled", rebooked: true };
+    return { result: "rescheduled", rebooked: true };
   }
-  if (meetings.length === 0) return { status: "no_meeting" as MeetingStatus, sinceMs: null };
-  const latest = [...meetings].sort(byTimeAsc)[meetings.length - 1];
-  const latestMs = Date.parse(latest.hs_timestamp ?? "");
-  if (latest.hs_meeting_outcome === "NO_SHOW" || latest.hs_meeting_outcome === "CANCELED") {
-    return { status: "needs_rebook" as MeetingStatus, sinceMs: latestMs };
-  }
-  return { status: (latestMs > nowMs ? "scheduled" : "not_logged") as MeetingStatus, sinceMs: null };
+  return { result: Date.parse(m.hs_timestamp ?? "") > nowMs ? "scheduled" : "not_logged", rebooked: false };
 }
 
-// A no-show/cancel that was followed by a later, non-canceled meeting = rebooked.
-function meetingsShowRebook(meetings: Meeting[]): boolean {
+// Deal status, from the HubSpot meeting records only (per the user — the
+// Intro Meeting Status deal field is no longer used) plus deal/company state:
+//  - The intro attempts are the deal's meetings in time order up to and
+//    including the first one that sat (later meetings are assessments etc.).
+//  - HELD if an attempt sat; statusSource says how (recorded > outcome).
+//    Failing that, a deal that moved on to MQL/SQL is held ("stage" — AEs
+//    often leave the outcome at Scheduled), and its last past attempt is
+//    counted as the one that sat.
+//  - Otherwise the LATEST attempt decides: a no-show / cancel is LOST when
+//    the deal is closed lost or the company is marked Not Interested, else
+//    NEEDS REBOOK — until a BDR rebooks it (outcome -> Rescheduled, or a new
+//    meeting). Future -> scheduled; past with no outcome -> not_logged.
+// The check: Completed with no recording, or a recorded meeting marked
+// No show / Canceled, gets a checkFlag so someone verifies it.
+function deriveIntro(
+  meetings: Meeting[],
+  outcomeHistory: Map<string, string[]>,
+  progressed: boolean,
+  lost: boolean,
+  nowMs: number,
+) {
   const sorted = [...meetings].sort(byTimeAsc);
-  const firstMiss = sorted.findIndex((m) => m.hs_meeting_outcome === "NO_SHOW" || m.hs_meeting_outcome === "CANCELED");
-  return firstMiss >= 0 && sorted.slice(firstMiss + 1).some((m) => m.hs_meeting_outcome !== "CANCELED");
+  const attempts: { meeting: Meeting; result: AttemptResult; rebooked: boolean }[] = [];
+  for (const m of sorted) {
+    const a = attemptResult(m, outcomeHistory.get(m.id) ?? [], nowMs);
+    attempts.push({ meeting: m, ...a });
+    if (a.result === "sat") break;
+  }
+  // a miss followed by any later attempt was rebooked
+  for (let i = 0; i < attempts.length - 1; i++) {
+    if (attempts[i].result === "no_show" || attempts[i].result === "canceled") attempts[i].rebooked = true;
+  }
+
+  const recorded = meetings.filter(isRecorded).sort(byTimeAsc);
+  const completed = meetings.filter((m) => m.hs_meeting_outcome === "COMPLETED");
+  const proof = recorded[recorded.length - 1];
+  const checkFlag = recorded.some((m) => ["NO_SHOW", "CANCELED", "RESCHEDULED"].includes(m.hs_meeting_outcome ?? ""))
+    ? "no_show_but_recorded"
+    : completed.length > 0 && recorded.length === 0 && completed.some((m) => Date.parse(m.hs_timestamp ?? "") >= RECORDING_ERA_MS)
+      ? "completed_not_recorded"
+      : null;
+  const base = {
+    attempts,
+    checkFlag,
+    summary: proof?.hs_meeting_summary ?? null,
+    recordingMinutes: proof ? Math.round(Number(proof.hs_meeting_recording_duration ?? 0) / 60000) || null : null,
+    rebooked: attempts.some((a) => a.rebooked),
+    sinceMs: null as number | null,
+  };
+
+  const sat = attempts.find((a) => a.result === "sat");
+  if (sat) return { ...base, status: "held" as MeetingStatus, source: isRecorded(sat.meeting) ? "recorded" : "outcome" };
+  if (progressed) {
+    const lastPast = [...attempts].reverse().find((a) => a.result === "not_logged" || a.result === "scheduled");
+    if (lastPast && Date.parse(lastPast.meeting.hs_timestamp ?? "") <= nowMs) lastPast.result = "sat";
+    return { ...base, status: "held" as MeetingStatus, source: "stage" };
+  }
+  if (attempts.length === 0) return { ...base, status: "no_meeting" as MeetingStatus, source: "auto" };
+  const latest = attempts[attempts.length - 1];
+  if ((latest.result === "no_show" || latest.result === "canceled") && !latest.rebooked) {
+    const status: MeetingStatus = lost ? (latest.result === "no_show" ? "no_show_lost" : "cancelled_lost") : "needs_rebook";
+    return { ...base, status, source: "auto", sinceMs: Date.parse(latest.meeting.hs_timestamp ?? "") };
+  }
+  if (latest.result === "not_logged") return { ...base, status: "not_logged" as MeetingStatus, source: "auto" };
+  // scheduled, or rebooked / moved and waiting on the new meeting
+  return { ...base, status: "scheduled" as MeetingStatus, source: "auto" };
 }
 
 function earliestValue(history: Array<{ value: string; timestamp: string }> | undefined): string | undefined {
@@ -239,9 +324,8 @@ export async function syncTeamDeals(sinceDay: string) {
       "bant_qualified",
       "source_group",
       "source",
-      "intro_meeting_status",
     ],
-    ["hubspot_owner_id", "pipeline", "dealstage", "intro_meeting_status"],
+    ["hubspot_owner_id", "pipeline", "dealstage", "bant_qualified"],
   );
 
   // Only deals that STARTED in the Marketing Pipeline are BDR bookings.
@@ -268,10 +352,10 @@ export async function syncTeamDeals(sinceDay: string) {
   // live — "Association of Alberta Registry Agents - IWI Group - Sage
   // Introduction" exists but isn't reachable from its deal), while titles
   // follow a consistent "<Company> - IWI Group - ..." convention.
-  const { overflow: meetingOverflow, results: windowMeetings } = await searchAll<MeetingProps & { hs_meeting_title?: string }>(
+  const { overflow: meetingOverflow, results: windowMeetings } = await searchAll<MeetingProps>(
     "meetings",
     [{ propertyName: "hs_createdate", operator: "GTE", value: String(torontoMidnightUtcMs(sinceDay) - MEETING_LOOKBACK_MS) }],
-    ["hs_timestamp", "hs_createdate", "hs_meeting_outcome", "hs_meeting_title"],
+    MEETING_PROPS,
   );
   if (meetingOverflow) throw new Error(`team deal sync: more than 10k meetings since ${sinceDay}`);
 
@@ -283,12 +367,7 @@ export async function syncTeamDeals(sinceDay: string) {
       ...[...companyToMeetings.values()].flat(),
     ]),
   ].filter((id) => !meetingsById.has(id));
-  const extra = await batchReadObjects<MeetingProps & { hs_meeting_title?: string }>("meetings", missingIds, [
-    "hs_timestamp",
-    "hs_createdate",
-    "hs_meeting_outcome",
-    "hs_meeting_title",
-  ]);
+  const extra = await batchReadObjects<MeetingProps>("meetings", missingIds, MEETING_PROPS);
   for (const m of extra) meetingsById.set(m.id, { id: m.id, ...m.properties });
   // Calendar-synced cancellations arrive titled "Canceled: <original title>"
   // with no outcome set (seen live: "Canceled: Sage - IWI") — treat the
@@ -297,11 +376,37 @@ export async function syncTeamDeals(sinceDay: string) {
   for (const m of meetingsById.values()) {
     if (!m.hs_meeting_outcome && CANCELED_PREFIX.test(m.hs_meeting_title ?? "")) m.hs_meeting_outcome = "CANCELED";
   }
+  // Outcome history only matters for meetings now marked Rescheduled (was it
+  // a no-show first?) — fetched just for those.
+  const rescheduledIds = [...meetingsById.values()].filter((m) => m.hs_meeting_outcome === "RESCHEDULED").map((m) => m.id);
+  const rescheduledHistory = await batchReadObjectsWithHistory<MeetingProps>(
+    "meetings",
+    rescheduledIds,
+    ["hs_meeting_outcome"],
+    ["hs_meeting_outcome"],
+  );
+  const outcomeHistory = new Map(
+    rescheduledHistory.map((m) => [m.id, (m.propertiesWithHistory?.hs_meeting_outcome ?? []).map((h) => h.value)]),
+  );
+
+  // Companies marked Not Interested (Lead Status or Stage) make a missed
+  // intro "lost" rather than "needs rebook" (per the user).
+  const companyRecords = await batchReadObjects<{ hs_lead_status?: string; stage?: string }>("companies", companyIds, [
+    "hs_lead_status",
+    "stage",
+  ]);
+  const notInterestedCompanies = new Set(
+    companyRecords
+      .filter((c) => /not[_ ]interested/i.test(c.properties.hs_lead_status ?? "") || /not interested/i.test(c.properties.stage ?? ""))
+      .map((c) => c.id),
+  );
+
   const normalize = (s: string) =>
     s.replace(CANCELED_PREFIX, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   const titledMeetings = windowMeetings.map((m) => ({ id: m.id, title: normalize(m.properties.hs_meeting_title ?? "") }));
 
   const nowMs = Date.now();
+  const attemptRows: (typeof teamIntroMeetings.$inferInsert)[] = [];
   const rows: (typeof teamDeals.$inferInsert)[] = booked.map((d) => {
     const p = d.properties;
     const createdMs = Date.parse(p.createdate ?? "");
@@ -321,7 +426,11 @@ export async function syncTeamDeals(sinceDay: string) {
       .map((id) => meetingsById.get(id))
       .filter((m): m is NonNullable<typeof m> => Boolean(m))
       .filter((m) => Date.parse(m.hs_createdate ?? m.hs_timestamp ?? "") >= createdMs - MEETING_LOOKBACK_MS);
-    const intro = [...candidates].sort(
+    // Intro attempts must happen within INTRO_WINDOW_MS of the booking — a
+    // first meeting months later is an assessment/proposal (seen live: a Feb
+    // booking's "Sage 300 Proposal" in Sep), not the intro.
+    const introCandidates = candidates.filter((m) => Date.parse(m.hs_timestamp ?? "") <= createdMs + INTRO_WINDOW_MS);
+    const intro = [...introCandidates].sort(
       (a, b) => Date.parse(a.hs_timestamp ?? "") - Date.parse(b.hs_timestamp ?? ""),
     )[0];
 
@@ -347,36 +456,32 @@ export async function syncTeamDeals(sinceDay: string) {
     const sqlDate = sqlMs != null ? toTorontoDateStr(sqlMs) : null;
     const mqlDate = mqlMs != null ? toTorontoDateStr(mqlMs) : null;
 
-    // Status: a final Intro Meeting Status set in HubSpot wins; otherwise
-    // infer from the meeting records. "Scheduled" set by hand only overrides
-    // an inferred needs_rebook (someone rebooked it), dated by the meetings.
-    const derived = deriveMeetingStatus(candidates, Boolean(mqlDate || sqlDate), nowMs);
-    const manual = p.intro_meeting_status ?? "";
-    const statusHistory = [...(history.intro_meeting_status ?? [])].sort(
-      (a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp),
-    );
-    let meetingStatus: MeetingStatus;
-    let statusSinceMs: number | null;
-    let statusSource: "hubspot" | "auto";
-    if (MANUAL_FINAL_STATUSES.has(manual)) {
-      meetingStatus = manual as MeetingStatus;
-      const setAt = [...statusHistory].reverse().find((h) => h.value === manual);
-      statusSinceMs = setAt ? Date.parse(setAt.timestamp) : null;
-      statusSource = "hubspot";
-    } else if (manual === "scheduled" && derived.status === "needs_rebook") {
-      const next = candidates.find((m) => Date.parse(m.hs_timestamp ?? "") > nowMs);
-      meetingStatus = next ? "scheduled" : "not_logged";
-      statusSinceMs = null;
-      statusSource = "hubspot";
-    } else {
-      meetingStatus = derived.status;
-      statusSinceMs = derived.sinceMs;
-      statusSource = "auto";
+    const lost =
+      p.dealstage === MARKETING_CLOSED_LOST ||
+      p.dealstage === "closedlost" ||
+      (dealToCompanies.get(d.id) ?? []).some((c) => notInterestedCompanies.has(c));
+    const derived = deriveIntro(introCandidates, outcomeHistory, Boolean(mqlDate || sqlDate), lost, nowMs);
+    const meetingStatus = derived.status;
+    const statusSinceMs = derived.sinceMs;
+    const rebooked = derived.rebooked;
+    for (const a of derived.attempts) {
+      if (!a.meeting.hs_timestamp) continue;
+      attemptRows.push({
+        dealId: d.id,
+        meetingId: a.meeting.id,
+        meetingAt: new Date(a.meeting.hs_timestamp),
+        result: a.result,
+        rebooked: a.rebooked,
+      });
     }
-    const rebookIdx = statusHistory.findIndex((h) => h.value === "needs_rebook");
-    const rebooked =
-      (rebookIdx >= 0 && statusHistory.slice(rebookIdx + 1).some((h) => h.value === "scheduled" || h.value === "held")) ||
-      meetingsShowRebook(candidates);
+
+    // BANT counts in the month the box was ticked (never before the booking).
+    const bantSet = p.bant_qualified === "true"
+      ? [...(history.bant_qualified ?? [])]
+          .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp))
+          .find((h) => h.value === "true")
+      : undefined;
+    const bantMs = p.bant_qualified === "true" ? Math.max(createdMs, bantSet ? Date.parse(bantSet.timestamp) : createdMs) : null;
 
     return {
       hubspotDealId: d.id,
@@ -389,7 +494,10 @@ export async function syncTeamDeals(sinceDay: string) {
       meetingId: intro?.id ?? null,
       meetingAt: intro?.hs_timestamp ? new Date(intro.hs_timestamp) : null,
       meetingStatus,
-      statusSource,
+      statusSource: derived.source,
+      checkFlag: derived.checkFlag,
+      meetingSummary: derived.summary,
+      recordingMinutes: derived.recordingMinutes,
       statusSince: statusSinceMs ? new Date(statusSinceMs) : null,
       rebooked,
       sourceGroup: effectiveSourceGroup(p),
@@ -398,6 +506,7 @@ export async function syncTeamDeals(sinceDay: string) {
       mqlDate,
       sqlDate,
       bant: p.bant_qualified === "true",
+      bantDate: bantMs != null ? toTorontoDateStr(bantMs) : null,
       closedWon: p.dealstage === "closedwon",
       lastSyncedAt: new Date(),
     };
@@ -420,6 +529,9 @@ export async function syncTeamDeals(sinceDay: string) {
           meetingAt: sql`excluded.meeting_at`,
           meetingStatus: sql`excluded.meeting_status`,
           statusSource: sql`excluded.status_source`,
+          checkFlag: sql`excluded.check_flag`,
+          meetingSummary: sql`excluded.meeting_summary`,
+          recordingMinutes: sql`excluded.recording_minutes`,
           statusSince: sql`excluded.status_since`,
           rebooked: sql`excluded.rebooked`,
           sourceGroup: sql`excluded.source_group`,
@@ -428,6 +540,7 @@ export async function syncTeamDeals(sinceDay: string) {
           mqlDate: sql`excluded.mql_date`,
           sqlDate: sql`excluded.sql_date`,
           bant: sql`excluded.bant`,
+          bantDate: sql`excluded.bant_date`,
           closedWon: sql`excluded.closed_won`,
           lastSyncedAt: sql`excluded.last_synced_at`,
         },
@@ -446,6 +559,15 @@ export async function syncTeamDeals(sinceDay: string) {
         ),
       );
   }
+
+  // Intro attempts are rebuilt for every synced deal (deal ids in this run).
+  await db.transaction(async (tx) => {
+    for (const ids of chunkArray(bookedIds, 500)) {
+      await tx.delete(teamIntroMeetings).where(inArray(teamIntroMeetings.dealId, ids));
+    }
+    for (const batch of chunkArray(attemptRows, 500)) await tx.insert(teamIntroMeetings).values(batch);
+    await tx.execute(sql`delete from team_intro_meetings where deal_id not in (select hubspot_deal_id from team_deals)`);
+  });
 
   return { deals: rows.length };
 }

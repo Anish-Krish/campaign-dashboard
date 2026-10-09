@@ -24,7 +24,7 @@ function authHeaders() {
 
 // Retries HubSpot's rate-limit responses (429) with backoff — the segment
 // sync reads thousands of contacts/calls per run and can hit the burst limit.
-async function hubspotFetch<T>(
+export async function hubspotFetch<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
@@ -331,22 +331,24 @@ interface Owner {
 }
 
 export async function listOwners(): Promise<Owner[]> {
+  // HubSpot's archived flag is exclusive: archived=true returns ONLY
+  // deactivated users. Fetch both so current reps (e.g. new hires) and former
+  // reps (whose contacts still need a name) are all present.
   const owners: Owner[] = [];
-  let after: string | undefined;
-  do {
-    // archived=true includes deactivated (but not fully-deleted) HubSpot
-    // users, so contacts owned by a former rep still resolve to a name
-    // instead of a dangling ID.
-    const qs = new URLSearchParams({ limit: "100", archived: "true" });
-    if (after) qs.set("after", after);
-    const page = await hubspotFetch<{
-      results: Owner[];
-      paging?: { next?: { after: string } };
-    }>(`/crm/v3/owners?${qs.toString()}`);
-    owners.push(...page.results);
-    after = page.paging?.next?.after;
-  } while (after);
-  return owners;
+  for (const archived of ["false", "true"]) {
+    let after: string | undefined;
+    do {
+      const qs = new URLSearchParams({ limit: "100", archived });
+      if (after) qs.set("after", after);
+      const page = await hubspotFetch<{
+        results: Owner[];
+        paging?: { next?: { after: string } };
+      }>(`/crm/v3/owners?${qs.toString()}`);
+      owners.push(...page.results);
+      after = page.paging?.next?.after;
+    } while (after);
+  }
+  return [...new Map(owners.map((o) => [o.id, o])).values()];
 }
 
 // --- Call disposition options -------------------------------------------------

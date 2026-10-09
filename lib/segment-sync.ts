@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { segmentLeads, segments } from "@/lib/db/schema";
+import { segmentLeadDays, segmentLeads, segments } from "@/lib/db/schema";
 import { eq, sql } from "drizzle-orm";
 import {
   batchReadAssociations,
@@ -75,7 +75,9 @@ export async function runSegmentSync(options?: { all?: boolean; segmentIds?: num
     for (const s of active) {
       const end = s.endDate ?? today;
       const rows: (typeof segmentLeads.$inferInsert)[] = [];
+      const dayRows: (typeof segmentLeadDays.$inferInsert)[] = [];
       for (const contactId of membersBySegment.get(s.id) ?? []) {
+        const byDay = new Map<string, { calls: number; connected: boolean; conversation: boolean }>();
         let calls = 0;
         let connected = false;
         let conversation = false;
@@ -90,7 +92,13 @@ export async function runSegmentSync(options?: { all?: boolean; segmentIds?: num
           const label = c.hs_call_disposition ? (labelById.get(c.hs_call_disposition) ?? "") : "";
           if (label.startsWith("Connected")) connected = true;
           if (CONVERSATION_LABELS.has(label)) conversation = true;
+          const d = byDay.get(day) ?? { calls: 0, connected: false, conversation: false };
+          d.calls += 1;
+          d.connected ||= label.startsWith("Connected");
+          d.conversation ||= CONVERSATION_LABELS.has(label);
+          byDay.set(day, d);
         }
+        for (const [day, d] of byDay) dayRows.push({ segmentId: s.id, contactId, day, ...d });
         rows.push({
           segmentId: s.id,
           contactId,
@@ -104,6 +112,8 @@ export async function runSegmentSync(options?: { all?: boolean; segmentIds?: num
       await db.transaction(async (tx) => {
         await tx.delete(segmentLeads).where(eq(segmentLeads.segmentId, s.id));
         for (let i = 0; i < rows.length; i += 500) await tx.insert(segmentLeads).values(rows.slice(i, i + 500));
+        await tx.delete(segmentLeadDays).where(eq(segmentLeadDays.segmentId, s.id));
+        for (let i = 0; i < dayRows.length; i += 500) await tx.insert(segmentLeadDays).values(dayRows.slice(i, i + 500));
         await tx.update(segments).set({ lastSyncedAt: new Date() }).where(eq(segments.id, s.id));
       });
     }
