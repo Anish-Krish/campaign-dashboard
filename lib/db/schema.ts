@@ -387,9 +387,41 @@ export const users = pgTable("users", {
   passwordHash: text("password_hash").notNull(), // scrypt: "salt:hash" (hex)
   role: text("role").notNull().default("bdr"), // admin | bdr
   hubspotOwnerId: text("hubspot_owner_id"),
+  email: text("email"), // where win notifications go (every active login with an email)
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
+
+// --- Live feed ------------------------------------------------------------------
+// Wins (meeting booked, BANT approved, goal hit) and team chat messages, in
+// one stream the pages poll for sounds / confetti / the feed panel.
+// dedupeKey makes each win fire once however many syncs see it
+// ("meeting:<dealId>", "bant:<dealId>", "goal:<ownerId|team>:<YYYY-MM>").
+export const liveEvents = pgTable("live_events", {
+  id: serial("id").primaryKey(),
+  kind: text("kind").notNull(), // meeting | bant | goal | chat
+  dedupeKey: text("dedupe_key").unique(),
+  ownerId: text("owner_id"), // the rep it's about
+  dealId: text("deal_id"),
+  title: text("title").notNull(),
+  body: text("body"),
+  userId: integer("user_id"), // chat author
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  notifiedAt: timestamp("notified_at"), // Teams / email sent (or skipped)
+});
+
+export const liveReactions = pgTable(
+  "live_reactions",
+  {
+    eventId: integer("event_id")
+      .notNull()
+      .references(() => liveEvents.id, { onDelete: "cascade" }),
+    userId: integer("user_id").notNull(),
+    emoji: text("emoji").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.eventId, t.userId, t.emoji] })],
+);
 
 // --- BDR campaigns & segments ------------------------------------------------------
 // Campaign = an outbound motion ("NPO Sage Intacct USA"); segment = one rep's

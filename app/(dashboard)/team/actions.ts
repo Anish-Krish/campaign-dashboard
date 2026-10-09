@@ -7,6 +7,7 @@ import { goals, syncRuns } from "@/lib/db/schema";
 import { requireAdmin, requireUser } from "@/lib/session";
 import { runSegmentSync } from "@/lib/segment-sync";
 import { runTeamSync } from "@/lib/team-sync";
+import { publishWins } from "@/lib/live";
 
 // "Refresh" on the Performance page: pulls just the team data (calls, deals,
 // meeting outcomes, segments) — ~40s, vs. the full scheduled job. Any login
@@ -35,6 +36,7 @@ export async function refreshTeamData(): Promise<{ ok: boolean; error?: string }
   try {
     await runTeamSync();
     await runSegmentSync();
+    await publishWins();
     await db.update(syncRuns).set({ status: "success", finishedAt: new Date() }).where(eq(syncRuns.id, run.id));
     revalidatePath("/team");
     return { ok: true };

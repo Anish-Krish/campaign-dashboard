@@ -5,6 +5,7 @@ import { GoalEditor } from "@/components/perf/GoalEditor";
 import { GoalProgress, Leaderboard, type LeaderRow } from "@/components/perf/Leaderboard";
 import { RefreshButton } from "@/components/perf/RefreshButton";
 import { RepPicker } from "@/components/perf/RepPicker";
+import { LiveFeed } from "@/components/live/LiveFeed";
 import { PerformanceView, type BreakdownRow, type Kpis, type Stage } from "@/components/perf/PerformanceView";
 import {
   ALL_BDRS,
@@ -591,7 +592,8 @@ export default async function TeamPage({
       </div>
 
       {leaderboard ? (
-        <>
+        <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="min-w-0 space-y-6">
           <GoalProgress
             eyebrow={`Team goal · ${periodLabel}`}
             actual={t.bant}
@@ -608,7 +610,11 @@ export default async function TeamPage({
             ]}
           />
           <Leaderboard rows={leaderRows} periodLabel={periodLabel} />
-        </>
+          </div>
+          <div className="xl:sticky xl:top-20">
+            <LiveFeed />
+          </div>
+        </div>
       ) : (
         <>
           {scope === "total" && !cohort && (

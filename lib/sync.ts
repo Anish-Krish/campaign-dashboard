@@ -11,6 +11,7 @@ import {
 import { getAuthorityKeywords, isAuthorityTitle } from "@/lib/authority";
 import { toTorontoDateStr } from "@/lib/timezone";
 import { runTeamSync } from "@/lib/team-sync";
+import { publishWins } from "@/lib/live";
 import { runSegmentSync } from "@/lib/segment-sync";
 
 type Outcome = "not_interested" | "unqualified" | "activated_lead" | "meeting_booked";
@@ -718,6 +719,13 @@ export async function runSyncJob(options?: { campaignIds?: number[] }) {
         const message = err instanceof Error ? err.message : String(err);
         console.error("[sync] segment sync failed:", message);
         result.failed.push({ campaignId: 0, name: "Segments", error: message });
+      }
+      // Safety net for the live feed: any win the webhook / 1-minute check
+      // missed still gets announced.
+      try {
+        await publishWins();
+      } catch (err) {
+        console.error("[sync] live wins failed:", err instanceof Error ? err.message : err);
       }
     }
     const hasFailures = result.failed.length > 0;

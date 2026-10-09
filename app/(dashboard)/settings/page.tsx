@@ -3,12 +3,14 @@ import { getCampaignsWithCounts } from "@/lib/queries";
 import { getOwnersNotOnTeam, getTeamGroups, getTeamMembers } from "@/lib/team-queries";
 import { asc } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { owners, users } from "@/lib/db/schema";
+import { appSettings, owners, users } from "@/lib/db/schema";
 import { requireAdmin } from "@/lib/session";
 import {
   addTeamMember,
   createUser,
   updateUser,
+  saveNotificationSettings,
+  sendTestNotification,
   createCampaign,
   deleteCampaign,
   removeTeamMember,
@@ -26,7 +28,7 @@ const labelStyle = { color: "var(--text-secondary)" };
 
 export default async function SettingsPage() {
   const me = await requireAdmin();
-  const [campaigns, keywords, team, groups, availableOwners, userRows, allOwners] = await Promise.all([
+  const [campaigns, keywords, team, groups, availableOwners, userRows, allOwners, settingRows] = await Promise.all([
     getCampaignsWithCounts(),
     getAuthorityKeywords(),
     getTeamMembers(),
@@ -34,7 +36,14 @@ export default async function SettingsPage() {
     getOwnersNotOnTeam(),
     db.select().from(users).orderBy(asc(users.name)),
     db.select().from(owners).orderBy(asc(owners.name)),
+    db.select().from(appSettings),
   ]);
+  const setting = (k: string) => settingRows.find((r) => r.key === k)?.value ?? null;
+  const teamsUrl = (setting("teams_webhook_url") as string | null) ?? "";
+  const emailFrom = (setting("email_from") as string | null) ?? "";
+  const emailWins = (setting("email_wins") as boolean | null) ?? true;
+  const withEmail = userRows.filter((u) => u.active && u.email).length;
+  const resendReady = Boolean(process.env.RESEND_API_KEY);
 
   return (
     <div className="space-y-10">
@@ -51,7 +60,7 @@ export default async function SettingsPage() {
             <form
               key={u.id}
               action={updateUser}
-              className="grid grid-cols-2 items-end gap-3 rounded border p-3 sm:grid-cols-6"
+              className="grid grid-cols-2 items-end gap-3 rounded border p-3 sm:grid-cols-7"
               style={{ borderColor: "var(--gridline)" }}
             >
               <input type="hidden" name="id" value={u.id} />
@@ -60,6 +69,12 @@ export default async function SettingsPage() {
                   Name · login <span style={{ color: "var(--text-primary)" }}>{u.username}</span>
                 </label>
                 <input name="name" defaultValue={u.name} className={inputClass} style={inputStyle} />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs" style={labelStyle}>
+                  Email
+                </label>
+                <input name="email" type="email" defaultValue={u.email ?? ""} placeholder="for win emails" className={inputClass} style={inputStyle} />
               </div>
               <div>
                 <label className="mb-1 block text-xs" style={labelStyle}>
@@ -100,7 +115,7 @@ export default async function SettingsPage() {
             </form>
           ))}
         </div>
-        <form action={createUser} className="grid grid-cols-2 items-end gap-3 sm:grid-cols-6">
+        <form action={createUser} className="grid grid-cols-2 items-end gap-3 sm:grid-cols-7">
           <div>
             <label className="mb-1 block text-xs" style={labelStyle}>
               Username
@@ -112,6 +127,12 @@ export default async function SettingsPage() {
               Name
             </label>
             <input name="name" required className={inputClass} style={inputStyle} />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs" style={labelStyle}>
+              Email
+            </label>
+            <input name="email" type="email" className={inputClass} style={inputStyle} />
           </div>
           <div>
             <label className="mb-1 block text-xs" style={labelStyle}>
@@ -144,6 +165,51 @@ export default async function SettingsPage() {
           <div>
             <button type="submit" className="btn btn-primary px-4 py-2">
               Create login
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section className="rounded-lg border p-5" style={cardStyle}>
+        <h2 className="mb-2 text-lg font-medium">Live notifications</h2>
+        <p className="mb-4 text-sm" style={{ color: "var(--text-muted)" }}>
+          Every meeting booked, BANT approved and goal hit is posted to Teams and emailed to every active login with an
+          email ({withEmail} right now). The live feed and sounds on the Leaderboard work without any of this.
+        </p>
+        <form action={saveNotificationSettings} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <label className="mb-1 block text-xs" style={labelStyle}>
+              Teams webhook URL{" "}
+              <span style={{ color: "var(--text-muted)" }}>
+                (in the Teams chat: ⋯ → Workflows → &ldquo;Post to a chat when a webhook request is received&rdquo;)
+              </span>
+            </label>
+            <input name="teamsWebhookUrl" defaultValue={teamsUrl} placeholder="https://…" className={inputClass} style={inputStyle} />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs" style={labelStyle}>
+              Email from{" "}
+              <span style={{ color: resendReady ? "var(--text-muted)" : "var(--status-warning)" }}>
+                {resendReady ? "(Resend connected)" : "(Resend API key not set yet)"}
+              </span>
+            </label>
+            <input
+              name="emailFrom"
+              defaultValue={emailFrom}
+              placeholder="IWI Wins <wins@iwigroup.ca>"
+              className={inputClass}
+              style={inputStyle}
+            />
+          </div>
+          <div className="flex items-end gap-3">
+            <label className="flex items-center gap-2 pb-2 text-sm" style={labelStyle}>
+              <input type="checkbox" name="emailWins" defaultChecked={emailWins} /> Email wins
+            </label>
+            <button type="submit" className="btn btn-primary px-4 py-2">
+              Save
+            </button>
+            <button type="submit" formAction={sendTestNotification} className="btn px-4 py-2">
+              Send test
             </button>
           </div>
         </form>

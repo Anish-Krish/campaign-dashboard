@@ -311,6 +311,21 @@ export async function syncTeamDeals(sinceDay: string) {
   if (searches.some((r) => r.overflow)) throw new Error(`team deal sync: more than 10k deals since ${sinceDay}`);
   const dealIds = [...new Set(searches.flatMap((r) => r.results.map((d) => d.id)))];
   if (dealIds.length === 0) return { deals: 0 };
+  return processTeamDeals(dealIds, { sinceDay, prune: true });
+}
+
+// Re-syncs just these deals (the live webhook / 1-minute check). Meetings are
+// searched back far enough to cover a booking's intro window.
+export async function syncTeamDealsByIds(dealIds: string[]) {
+  if (dealIds.length === 0) return { deals: 0 };
+  const sinceDay = addDays(todayInToronto(), -Math.ceil(INTRO_WINDOW_MS / 86400000) - 14);
+  return processTeamDeals([...new Set(dealIds)], { sinceDay, prune: false });
+}
+
+// Reads the given deals from HubSpot and upserts team_deals + their intro
+// attempts. prune: also drop deals created since sinceDay that are no longer
+// BDR bookings / were deleted (full sync only).
+async function processTeamDeals(dealIds: string[], { sinceDay, prune }: { sinceDay: string; prune: boolean }) {
 
   const deals = await batchReadObjectsWithHistory<DealProps>(
     "deals",
@@ -549,7 +564,7 @@ export async function syncTeamDeals(sinceDay: string) {
 
   // Deals deleted in HubSpot (or no longer in the window) drop out — guarded
   // so an empty fetch can never wipe the table.
-  if (bookedIds.length > 0) {
+  if (prune && bookedIds.length > 0) {
     await db
       .delete(teamDeals)
       .where(

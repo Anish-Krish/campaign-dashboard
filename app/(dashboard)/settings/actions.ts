@@ -3,7 +3,7 @@
 import { requireAdmin } from "@/lib/session";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
-import { campaigns, owners, teamMembers, users } from "@/lib/db/schema";
+import { appSettings, campaigns, liveEvents, owners, teamMembers, users } from "@/lib/db/schema";
 import { hashPassword } from "@/lib/passwords";
 import { eq } from "drizzle-orm";
 import { setAuthorityKeywords } from "@/lib/authority";
@@ -189,6 +189,11 @@ export async function removeTeamMember(formData: FormData) {
 
 // --- Users ----------------------------------------------------------------------
 
+function emailOf(formData: FormData): string | null {
+  const e = str(formData, "email")?.toLowerCase() ?? null;
+  return e && /.+@.+\..+/.test(e) ? e : null;
+}
+
 export async function createUser(formData: FormData) {
   await requireAdmin();
   const username = str(formData, "username")?.toLowerCase();
@@ -203,6 +208,7 @@ export async function createUser(formData: FormData) {
       passwordHash: await hashPassword(password),
       role: str(formData, "role") === "admin" ? "admin" : "bdr",
       hubspotOwnerId: str(formData, "hubspotOwnerId"),
+      email: emailOf(formData),
     })
     .onConflictDoNothing();
   revalidatePath("/settings");
@@ -219,10 +225,40 @@ export async function updateUser(formData: FormData) {
       name: str(formData, "name") ?? undefined,
       role: str(formData, "role") === "admin" ? "admin" : "bdr",
       hubspotOwnerId: str(formData, "hubspotOwnerId"),
+      email: emailOf(formData),
       // an admin can't lock themselves out
       active: id === admin.id ? true : formData.get("active") === "on",
       ...(password ? { passwordHash: await hashPassword(password) } : {}),
     })
     .where(eq(users.id, id));
+  revalidatePath("/settings");
+}
+
+// --- Live notifications ------------------------------------------------------------
+
+async function putSetting(key: string, value: unknown) {
+  await db.insert(appSettings).values({ key, value }).onConflictDoUpdate({ target: appSettings.key, set: { value } });
+}
+
+export async function saveNotificationSettings(formData: FormData) {
+  await requireAdmin();
+  const teams = str(formData, "teamsWebhookUrl");
+  if (teams && !/^https:\/\//.test(teams)) throw new Error("Teams webhook URL must start with https://");
+  await putSetting("teams_webhook_url", teams ?? null);
+  await putSetting("email_from", str(formData, "emailFrom") ?? null);
+  await putSetting("email_wins", formData.get("emailWins") === "on");
+  revalidatePath("/settings");
+}
+
+// Posts a test win to Teams + email so the setup can be checked end to end.
+export async function sendTestNotification() {
+  const me = await requireAdmin();
+  const { notifyPending } = await import("@/lib/live");
+  await db.insert(liveEvents).values({
+    kind: "meeting",
+    title: "Test: notifications are working",
+    body: `Sent from Settings by ${me.name}`,
+  });
+  await notifyPending();
   revalidatePath("/settings");
 }

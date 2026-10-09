@@ -29,7 +29,8 @@ export const config = {
     // CRON_SECRET), /api/inngest (called directly by Inngest's servers,
     // authenticated via INNGEST_SIGNING_KEY inside the route handler itself
     // — it never carries our session cookie), and Next.js internals/static
-    // assets.
-    "/((?!login|api/sync|api/inngest|_next/static|_next/image|favicon.ico|icon.svg).*)",
+    // assets. /api/hubspot/webhook (HubSpot signature) and /api/live/tick
+    // (CRON_SECRET) authenticate inside their handlers.
+    "/((?!login|api/sync|api/inngest|api/hubspot/webhook|api/live/tick|_next/static|_next/image|favicon.ico|icon.svg).*)",
   ],
 };
