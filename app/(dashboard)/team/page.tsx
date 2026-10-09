@@ -689,6 +689,8 @@ export default async function TeamPage({
         activatedLeads={activatedLeads}
         range={range}
         cohort={cohort}
+        pace={pace}
+        bantGoal={segScope || cohort ? null : focusRep ? repGoal : teamGoal}
       />
         </>
       )}

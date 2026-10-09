@@ -81,6 +81,10 @@ type Props = {
   activatedLeads: ActivatedLead[]; // activated in this period
   range: { startDate: string; endDate: string };
   cohort: boolean;
+  // share of the period elapsed (1 = finished) — an unfinished period is
+  // compared with where it should be by today, not the last full period
+  pace: number;
+  bantGoal: number | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -127,6 +131,39 @@ function Delta({ now, prev, unit = "", label }: { now: number | null; prev: numb
         {unit}
       </span>{" "}
       <span style={{ color: "var(--text-muted)" }}>vs {label}</span>
+    </span>
+  );
+}
+
+// In an unfinished period: actual vs the pace needed by today (the goal's pace
+// for BANT, else last period's total pro-rated). A finished period compares
+// with the last one in full.
+function PaceDelta({
+  now,
+  prev,
+  pace,
+  goal,
+  label,
+}: {
+  now: number;
+  prev: number | null;
+  pace: number;
+  goal?: number | null;
+  label: string;
+}) {
+  if (pace >= 1 || pace <= 0) return <Delta now={now} prev={prev} label={label} />;
+  const base = goal ?? prev;
+  if (base == null) return null;
+  const expected = base * pace;
+  const d = Math.round((now - expected) * 10) / 10;
+  const ahead = d >= 0;
+  const what = goal != null ? `goal ${goal}` : `${label} had ${prev}`;
+  return (
+    <span title={`${what} → pace ${Math.round(expected * 10) / 10} by today`}>
+      <span style={{ color: ahead ? "var(--status-good)" : "var(--status-critical)" }}>
+        {ahead ? (d === 0 ? "On pace" : `+${d} ahead`) : `${Math.abs(d)} behind`}
+      </span>{" "}
+      <span style={{ color: "var(--text-muted)" }}>{goal != null ? "goal pace" : `${label} pace`}</span>
     </span>
   );
 }
@@ -761,14 +798,14 @@ export function PerformanceView(props: Props) {
         <Tile
           label="Meetings set"
           value={fmt(k.meetings)}
-          delta={p && <Delta now={k.meetings} prev={p.meetings} label={deltaLabel} />}
+          delta={p && <PaceDelta now={k.meetings} prev={p.meetings} pace={props.pace} label={deltaLabel} />}
           onClick={() => setDrawer({ kind: "meetings" })}
           title="BDR-sourced meetings booked in this period — click for the list"
         />
         <Tile
           label="Meetings sat"
           value={fmt(k.sat)}
-          delta={p && <Delta now={k.sat} prev={p.sat} label={deltaLabel} />}
+          delta={p && <PaceDelta now={k.sat} prev={p.sat} pace={props.pace} label={deltaLabel} />}
           onClick={() => setDrawer({ kind: "shows", tab: "sat" })}
           title={
             props.cohort
@@ -790,21 +827,25 @@ export function PerformanceView(props: Props) {
         <Tile
           label="BANT"
           value={fmt(k.bant)}
-          delta={p && <Delta now={k.bant} prev={p.bant} label={deltaLabel} />}
+          delta={
+            (p || props.bantGoal != null) && (
+              <PaceDelta now={k.bant} prev={p?.bant ?? null} pace={props.pace} goal={props.bantGoal} label={deltaLabel} />
+            )
+          }
           onClick={() => setDrawer({ kind: "stage", stage: "bant" })}
           title="Click for the BANT meetings"
         />
         <Tile
           label="MQL"
           value={fmt(k.mqls)}
-          delta={p && <Delta now={k.mqls} prev={p.mqls} label={deltaLabel} />}
+          delta={p && <PaceDelta now={k.mqls} prev={p.mqls} pace={props.pace} label={deltaLabel} />}
           onClick={() => setDrawer({ kind: "stage", stage: "mql" })}
           title="Click for the MQLs"
         />
         <Tile
           label="SQL"
           value={fmt(k.sqls)}
-          delta={p && <Delta now={k.sqls} prev={p.sqls} label={deltaLabel} />}
+          delta={p && <PaceDelta now={k.sqls} prev={p.sqls} pace={props.pace} label={deltaLabel} />}
           onClick={() => setDrawer({ kind: "stage", stage: "sql" })}
           title="Click for the SQLs"
         />
