@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { teamCallDaily, teamDeals, teamIntroMeetings } from "@/lib/db/schema";
+import { appSettings, teamCallDaily, teamDeals, teamIntroMeetings } from "@/lib/db/schema";
 import { and, eq, gte, inArray, notInArray, sql } from "drizzle-orm";
 import {
   batchReadAssociations,
@@ -426,6 +426,11 @@ async function processTeamDeals(dealIds: string[], { sinceDay, prune }: { sinceD
     s.replace(CANCELED_PREFIX, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   const titledMeetings = windowMeetings.map((m) => ({ id: m.id, title: normalize(m.properties.hs_meeting_title ?? "") }));
 
+  // BANT ticked after the fact (e.g. from a signed commission form) counts on
+  // the day set here instead of the day the box was ticked — keyed by deal id.
+  const [overrideRow] = await db.select().from(appSettings).where(eq(appSettings.key, "bant_date_overrides"));
+  const bantOverrides = (overrideRow?.value ?? {}) as Record<string, string>;
+
   const nowMs = Date.now();
   const attemptRows: (typeof teamIntroMeetings.$inferInsert)[] = [];
   const rows: (typeof teamDeals.$inferInsert)[] = booked.map((d) => {
@@ -528,7 +533,7 @@ async function processTeamDeals(dealIds: string[], { sinceDay, prune }: { sinceD
       mqlDate,
       sqlDate,
       bant: p.bant_qualified === "true",
-      bantDate: bantMs != null ? toTorontoDateStr(bantMs) : null,
+      bantDate: bantMs != null ? (bantOverrides[d.id] ?? toTorontoDateStr(bantMs)) : null,
       closedWon: p.dealstage === "closedwon",
       lastSyncedAt: new Date(),
     };
