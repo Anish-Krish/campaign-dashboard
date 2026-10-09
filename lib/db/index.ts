@@ -14,10 +14,11 @@ const client =
     // DATABASE_URL must be Supabase's SESSION pooler (port 5432). The
     // transaction pooler (6543) wedged under parallel queries — backends stuck
     // in ClientRead until the statement timeout (reproduced at 30 parallel
-    // page queries; session mode ran them all fine). Session mode holds a
-    // server connection per client connection, so keep the pool small.
-    max: 4,
-    idle_timeout: 20, // seconds — hand idle connections back to the pooler
+    // page queries). Session mode allows only pool_size (15) clients across
+    // ALL Vercel instances + scripts, so each instance keeps at most 2 and
+    // hands them back after 5s idle (prod hit EMAXCONNSESSION at max 4 / 20s).
+    max: 2,
+    idle_timeout: 5,
     connect_timeout: 15,
   });
 if (process.env.NODE_ENV !== "production") globalForDb.pgClient = client;
