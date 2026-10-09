@@ -116,12 +116,22 @@ export async function getOwnersNotOnTeam() {
 // Core aggregate: one row per (owner, bucket) for team members in `group`.
 // bucket is 'all' or a YYYY-MM month, so the same query backs both the
 // per-rep leaderboard and the month-by-month trend.
-async function aggregate(range: { startDate: string; endDate: string }, group: string, byMonth: boolean) {
-  const callBucket = byMonth ? sql`to_char(c.day, 'YYYY-MM')` : sql`'all'`;
+type Granularity = "all" | "month" | "week";
+
+// bucket expression for a date-typed SQL expression: 'all', 'YYYY-MM', or the
+// Monday of its week as 'YYYY-MM-DD'.
+function bucketOf(dateExpr: ReturnType<typeof sql>, g: Granularity) {
+  if (g === "month") return sql`to_char(${dateExpr}, 'YYYY-MM')`;
+  if (g === "week") return sql`to_char(date_trunc('week', ${dateExpr}), 'YYYY-MM-DD')`;
+  return sql`'all'`;
+}
+
+async function aggregate(range: { startDate: string; endDate: string }, group: string, granularity: Granularity) {
   const dealDay = TORONTO_DAY("d.created_at");
-  const dealBucket = byMonth ? sql`left(${dealDay}, 7)` : sql`'all'`;
-  const mqlBucket = byMonth ? sql`to_char(d.mql_date, 'YYYY-MM')` : sql`'all'`;
-  const sqlBucket = byMonth ? sql`to_char(d.sql_date, 'YYYY-MM')` : sql`'all'`;
+  const callBucket = bucketOf(sql`c.day`, granularity);
+  const dealBucket = bucketOf(sql`(${dealDay})::date`, granularity);
+  const mqlBucket = bucketOf(sql`d.mql_date`, granularity);
+  const sqlBucket = bucketOf(sql`d.sql_date`, granularity);
   const { startDate, endDate } = range;
 
   const rows = await db.execute<Record<string, string | number>>(sql`
@@ -211,7 +221,7 @@ async function aggregate(range: { startDate: string; endDate: string }, group: s
 // Per-rep leaderboard for a date range. Every member of the group gets a row
 // (zeros included) so a rep with no activity is visible, not silently missing.
 export async function getTeamStats(range: { startDate: string; endDate: string }, group: string) {
-  const [members, rows] = await Promise.all([getTeamMembers(), aggregate(range, group, false)]);
+  const [members, rows] = await Promise.all([getTeamMembers(), aggregate(range, group, "all")]);
   const byOwner = new Map(rows.map((r) => [r.ownerId, r]));
   const reps = members
     .filter((m) => group === ALL_BDRS || m.teamGroup === group)
@@ -228,11 +238,28 @@ export async function getTeamStats(range: { startDate: string; endDate: string }
 // Month-by-month team totals for one calendar year (Jan..Dec, future months
 // included as zeros so the year reads as a full grid).
 export async function getTeamMonthly(year: number, group: string) {
-  const rows = await aggregate({ startDate: `${year}-01-01`, endDate: `${year}-12-31` }, group, true);
+  const rows = await aggregate({ startDate: `${year}-01-01`, endDate: `${year}-12-31` }, group, "month");
   return Array.from({ length: 12 }, (_, i) => {
     const month = `${year}-${String(i + 1).padStart(2, "0")}`;
     return { month, ...finish({ ownerId: month, name: month, role: "", ...sum(rows.filter((r) => r.bucket === month)) }) };
   });
+}
+
+// Week-by-week team totals for a date range (weeks start Monday; a week that
+// straddles the range edge only counts the days inside the range).
+export async function getTeamWeekly(range: { startDate: string; endDate: string }, group: string) {
+  const rows = await aggregate(range, group, "week");
+  const weeks: string[] = [];
+  const start = new Date(`${range.startDate}T00:00:00Z`);
+  const monday = new Date(start);
+  monday.setUTCDate(start.getUTCDate() - ((start.getUTCDay() + 6) % 7));
+  for (let d = monday; d.toISOString().slice(0, 10) <= range.endDate; d = new Date(d.getTime() + 7 * 86400000)) {
+    weeks.push(d.toISOString().slice(0, 10));
+  }
+  return weeks.map((week) => ({
+    week,
+    ...finish({ ownerId: week, name: week, role: "", ...sum(rows.filter((r) => r.bucket === week)) }),
+  }));
 }
 
 export type Booking = {
@@ -248,6 +275,9 @@ export type Booking = {
   bant: boolean;
   mqlDate: string | null;
   sqlDate: string | null;
+  ownerId: string;
+  segmentId: number | null;
+  campaignId: number | null;
 };
 
 const BOOKING_SELECT = sql.raw(`
@@ -256,7 +286,8 @@ const BOOKING_SELECT = sql.raw(`
   to_char(d.meeting_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Toronto', 'YYYY-MM-DD') as meeting_on,
   d.meeting_status, d.status_source, d.rebooked, d.bant,
   case when d.status_since is not null then extract(day from now() at time zone 'UTC' - d.status_since)::int end as days_in_status,
-  d.mql_date::text as mql_date, d.sql_date::text as sql_date`);
+  d.mql_date::text as mql_date, d.sql_date::text as sql_date,
+  d.booked_by_owner_id, d.segment_id, (select s.campaign_id from segments s where s.id = d.segment_id) as campaign_id`);
 
 function toBooking(r: Record<string, unknown>): Booking {
   return {
@@ -272,6 +303,9 @@ function toBooking(r: Record<string, unknown>): Booking {
     bant: Boolean(r.bant),
     mqlDate: (r.mql_date as string) ?? null,
     sqlDate: (r.sql_date as string) ?? null,
+    ownerId: String(r.booked_by_owner_id),
+    segmentId: r.segment_id == null ? null : Number(r.segment_id),
+    campaignId: r.campaign_id == null ? null : Number(r.campaign_id),
   };
 }
 
@@ -303,6 +337,9 @@ export async function getNeedsAttention(group: string) {
     where ${BDR_SOURCED}
       and d.meeting_status in ('not_logged', 'needs_rebook')
       and coalesce(d.deal_stage, '') not in ('123017108', 'closedlost', 'closedwon')
+      -- only recent bookings: a meeting months old with no outcome is history,
+      -- not an action item (keeps the queue short and actionable)
+      and d.created_at >= now() - interval '90 days'
     order by case d.meeting_status when 'needs_rebook' then 0 when 'not_logged' then 1 else 2 end, d.created_at
   `);
   return rows.map(toBooking);
@@ -489,4 +526,19 @@ export async function getOutsideSegmentDeals(range: { startDate: string; endDate
       and ${dealDay} between ${range.startDate} and ${range.endDate}
   `);
   return { meetings: Number(row?.meetings ?? 0), activated: Number(row?.activated ?? 0) };
+}
+
+// Every BDR deal credited to the given segments (any booking date) — the
+// drill-down list for the campaign/segment views, whose numbers use each
+// segment's own window rather than the selected period.
+export async function getBookingsForSegments(segmentIds: number[]) {
+  if (segmentIds.length === 0) return [];
+  const rows = await db.execute<Record<string, unknown>>(sql`
+    select ${BOOKING_SELECT}
+    from team_deals d
+    left join team_members tm on tm.hubspot_owner_id = d.booked_by_owner_id
+    where ${BDR_SOURCED} and d.segment_id in (${sql.join(segmentIds.map((id) => sql`${id}`), sql`, `)})
+    order by d.created_at desc
+  `);
+  return rows.map(toBooking);
 }

@@ -1,31 +1,39 @@
 @import "tailwindcss";
 
-/* This app renders in a fixed dark theme (internal tool), so these are the
-   dataviz skill's dark-mode tokens used directly, not behind a media query. */
+/* Neutral professional dark theme. Data colors are the dataviz skill's
+   dark-mode steps; the funnel's ordinal blue ramp was validated with its
+   validate_palette.js (--ordinal --mode dark --surface #15161a: all pass). */
 :root {
-  --background: #0d0d0d;
-  --foreground: #ffffff;
+  --background: #0b0c0e;
+  --foreground: #ededef;
 
-  --chart-surface: #1a1a19;
-  --text-primary: #ffffff;
-  --text-secondary: #c3c2b7;
-  --text-muted: #898781;
-  --gridline: #2c2c2a;
-  --border-hairline: rgba(255, 255, 255, 0.1);
+  --surface: #15161a; /* cards */
+  --surface-2: #1c1d22; /* hover / nested */
+  --chart-surface: var(--surface);
+  --text-primary: #ededef;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  --gridline: #26272c;
+  --border-hairline: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
 
-  --status-good: #0ca30c;
-  --status-warning: #fab219;
+  --accent: #5598e7;
+  --accent-soft: rgba(85, 152, 231, 0.14);
+
+  /* funnel ordinal ramp (light -> dark = earlier -> later stage) */
+  --ramp-1: #b7d3f6;
+  --ramp-2: #6da7ec;
+  --ramp-3: #3987e5;
+  --ramp-4: #1c5cab;
+  --neutral-mark: #52525b;
+
+  --status-good: #22a55b;
+  --status-warning: #e3a008;
   --status-serious: #ec835a;
-  --status-critical: #d03b3b;
+  --status-critical: #e05252;
 
-  /* Jarvis/HUD accent — was #3987e5, swapped for a cyan validated with the
-     dataviz skill's validate_palette.js against the full categorical set
-     (passes lightness/chroma/contrast, introduces no new CVD failures beyond
-     two pre-existing all-pairs issues unrelated to this token). Doubles as
-     both the chrome accent (borders, glow, buttons, active states) and the
-     "primary" data-series slot (meeting_booked, connected calls) — one token,
-     so chrome and data read as the same color everywhere. */
-  --series-blue: #0ea5b7;
+  /* legacy names still used by archived pages */
+  --series-blue: var(--accent);
   --series-aqua: #199e70;
   --series-yellow: #c98500;
   --series-green: #008300;
@@ -33,9 +41,8 @@
   --series-red: #e66767;
   --series-magenta: #d55181;
   --series-orange: #d95926;
-
-  --glow-cyan-soft: rgba(14, 165, 183, 0.16);
-  --glow-cyan-strong: rgba(14, 165, 183, 0.4);
+  --glow-cyan-soft: transparent;
+  --glow-cyan-strong: transparent;
 }
 
 @theme inline {
@@ -45,74 +52,202 @@
   --font-mono: var(--font-geist-mono);
 }
 
+html {
+  color-scheme: dark;
+}
+
 body {
-  background:
-    radial-gradient(ellipse 80% 40% at 50% -10%, rgba(14, 165, 183, 0.07), transparent 60%),
-    linear-gradient(rgba(14, 165, 183, 0.035) 1px, transparent 1px) 0 0 / 100% 32px,
-    linear-gradient(90deg, rgba(14, 165, 183, 0.035) 1px, transparent 1px) 0 0 / 32px 100%,
-    var(--background);
+  background: var(--background);
   color: var(--foreground);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* HUD panel — the shared card treatment: cyan-tinted border, soft outer glow,
-   and two opposite-corner brackets (pure CSS, no images). Replaces the
-   repeated `rounded-lg border` + chart-surface/border-hairline inline-style
-   pattern used by every panel component. */
+/* Thin, quiet scrollbars everywhere (no chunky gutters). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.24);
+  background-clip: content-box;
+}
+
+/* Card — the one panel treatment used across the app. (.hud-panel kept as an
+   alias so archived pages pick up the new look without edits.) */
+.card,
 .hud-panel {
-  position: relative;
-  background: var(--chart-surface);
-  border: 1px solid rgba(14, 165, 183, 0.25);
-  border-radius: 0.5rem;
-  box-shadow: 0 0 0 1px rgba(14, 165, 183, 0.03) inset, 0 0 20px var(--glow-cyan-soft);
-}
-.hud-panel::before,
-.hud-panel::after {
-  content: "";
-  position: absolute;
-  width: 12px;
-  height: 12px;
-  pointer-events: none;
-}
-.hud-panel::before {
-  top: -1px;
-  left: -1px;
-  border-top: 2px solid var(--series-blue);
-  border-left: 2px solid var(--series-blue);
-}
-.hud-panel::after {
-  bottom: -1px;
-  right: -1px;
-  border-bottom: 2px solid var(--series-blue);
-  border-right: 2px solid var(--series-blue);
+  background: var(--surface);
+  border: 1px solid var(--border-hairline);
+  border-radius: 12px;
 }
 
-/* HUD section heading — terminal-style label above a panel's content. Only
-   for short labels/headings, never numeric values (those stay proportional
-   per the dataviz skill's figure guidance). */
+/* Small label above a value or section. */
+.eyebrow,
 .hud-heading {
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--text-secondary);
 }
 
-/* HUD button — replaces the plain `rounded border` button style used for
-   Sync Now / Log out / view tabs. */
+/* Buttons */
+.btn,
 .hud-button {
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  border: 1px solid rgba(14, 165, 183, 0.35);
-  background: rgba(14, 165, 183, 0.06);
-  color: var(--series-blue);
-  transition: background 150ms ease, box-shadow 150ms ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-primary);
+  border-radius: 8px;
+  transition: background 120ms ease, border-color 120ms ease;
 }
+.btn:hover:not(:disabled),
 .hud-button:hover:not(:disabled) {
-  background: rgba(14, 165, 183, 0.16);
-  box-shadow: 0 0 12px var(--glow-cyan-strong);
+  background: var(--surface-2);
 }
+.btn:disabled,
 .hud-button:disabled {
   opacity: 0.5;
+}
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0b0c0e;
+}
+.btn-primary:hover:not(:disabled) {
+  background: #6da7ec;
+}
+
+/* Segmented control (view / period switches) */
+.seg {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border-hairline);
+  border-radius: 9px;
+}
+.seg > a,
+.seg > button {
+  padding: 5px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  transition: background 120ms ease, color 120ms ease;
+}
+.seg > a:hover,
+.seg > button:hover {
+  color: var(--text-primary);
+}
+.seg > [aria-current="true"] {
+  background: var(--surface-2);
+  color: var(--text-primary);
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+
+/* Data tables */
+.data-table {
+  width: 100%;
+  font-size: 13px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.data-table th {
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: right;
+  padding: 10px 12px;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border-hairline);
+}
+.data-table th:first-child,
+.data-table td:first-child {
+  text-align: left;
+}
+.data-table td {
+  padding: 11px 12px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--gridline);
+  white-space: nowrap;
+}
+.data-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.data-table tbody tr.clickable {
+  cursor: pointer;
+}
+.data-table tbody tr.clickable:hover td {
+  background: var(--surface-2);
+}
+.data-table tfoot td {
+  color: var(--text-primary);
+  font-weight: 500;
+  border-top: 1px solid var(--border-strong);
+  border-bottom: none;
+}
+
+/* Status pill — always text + color, never color alone */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--dot, var(--text-muted));
+}
+
+/* Form controls */
+.input {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--background);
+  color: var(--text-primary);
+  padding: 8px 10px;
+  font-size: 13px;
+}
+input:focus,
+select:focus,
+textarea:focus,
+.input:focus {
+  outline: none;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 @keyframes hud-pulse {
@@ -125,10 +260,13 @@ body {
   }
 }
 
-input:focus,
-select:focus,
-textarea:focus {
-  outline: none;
-  border-color: var(--series-blue) !important;
-  box-shadow: 0 0 0 2px var(--glow-cyan-soft);
+@keyframes drawer-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
 }

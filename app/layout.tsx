@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Campaign Dashboard",
-  description: "Campaign performance and company engagement, synced from HubSpot",
+  title: "IWI Sales Performance",
+  description: "BDR team performance, synced from HubSpot",
 };
 
 export default function RootLayout({
@@ -27,7 +27,7 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased dark`}
     >
-      <body className="min-h-full flex flex-col bg-neutral-950 text-neutral-100">
+      <body className="min-h-full flex flex-col">
         {children}
       </body>
     </html>

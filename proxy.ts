@@ -30,6 +30,6 @@ export const config = {
     // authenticated via INNGEST_SIGNING_KEY inside the route handler itself
     // — it never carries our session cookie), and Next.js internals/static
     // assets.
-    "/((?!login|api/sync|api/inngest|_next/static|_next/image|favicon.ico).*)",
+    "/((?!login|api/sync|api/inngest|_next/static|_next/image|favicon.ico|icon.svg).*)",
   ],
 };

@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 import { login } from "./actions";
+import { LogoMark } from "@/components/LogoMark";
 
 export default function LoginPage() {
   const [state, formAction, pending] = useActionState(login, undefined);
@@ -9,11 +10,14 @@ export default function LoginPage() {
   return (
     <div className="flex min-h-screen items-center justify-center px-4" style={{ background: "var(--background)" }}>
       <form action={formAction} className="hud-panel w-full max-w-sm p-8">
-        <h1 className="hud-heading mb-1 text-sm" style={{ color: "var(--series-blue)" }}>
-          Campaign Dashboard
+        <div className="mb-4">
+          <LogoMark size={36} />
+        </div>
+        <h1 className="mb-1 text-base font-semibold" style={{ color: "var(--text-primary)" }}>
+          <span style={{ color: "#2f9be0" }}>IWI</span> Sales Performance
         </h1>
         <p className="mb-6 text-xs" style={{ color: "var(--text-muted)" }}>
-          Authorization required
+          Sign in to continue
         </p>
         <label className="hud-heading mb-1 block text-xs" style={{ color: "var(--text-secondary)" }} htmlFor="username">
           Username
