@@ -10,7 +10,10 @@ export const maxDuration = 60;
 // missed webhook, a meeting associated after the deal was created, etc. —
 // then publishes new wins. Usually finds nothing and costs one search call.
 export async function GET(request: Request) {
-  if (request.headers.get("authorization") !== `Bearer ${process.env.CRON_SECRET}`) {
+  // LIVE_TICK_SECRET is what the pg_cron job sends (its own secret, so the
+  // hourly sync's CRON_SECRET never has to live in the database).
+  const secret = process.env.LIVE_TICK_SECRET ?? process.env.CRON_SECRET;
+  if (!secret || request.headers.get("authorization") !== `Bearer ${secret}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const since = String(Date.now() - 4 * 60 * 1000);
