@@ -83,8 +83,8 @@ export default async function SegmentsPage() {
   const visible = isAdmin
     ? segRows
     : segRows.filter((s) => s.ownerId === user.hubspotOwnerId);
-  // only the owner registers / edits segments; reps see theirs read-only
-  const canRegister = isAdmin;
+  // reps register / edit their own segments (needs a linked HubSpot user)
+  const canRegister = isAdmin || Boolean(user.hubspotOwnerId);
   const memberOptions = members.map((m) => ({
     id: m.hubspotOwnerId,
     name: m.name,

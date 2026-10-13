@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bdrCampaigns, segments } from "@/lib/db/schema";
-import { requireAdmin, type CurrentUser } from "@/lib/session";
+import { isOwner, requireAdmin, requireUser, type CurrentUser } from "@/lib/session";
 import { getListName } from "@/lib/hubspot";
 import { runSegmentSync } from "@/lib/segment-sync";
 
@@ -18,9 +18,10 @@ function revalidate() {
   revalidatePath("/team");
 }
 
-// BDR logins always register segments as themselves; admins pick the rep.
+// Reps can only register / edit / delete their OWN segments (always as
+// themselves); only the owner picks the rep or touches anyone else's.
 function resolveOwner(user: CurrentUser, formData: FormData): string | null {
-  return user.role === "admin" ? str(formData, "ownerId") : user.hubspotOwnerId;
+  return isOwner(user) ? str(formData, "ownerId") : user.hubspotOwnerId;
 }
 
 async function resolveCampaignId(formData: FormData): Promise<number | null> {
@@ -38,13 +39,13 @@ async function resolveCampaignId(formData: FormData): Promise<number | null> {
 }
 
 async function canEdit(user: CurrentUser, segmentId: number) {
-  if (user.role === "admin") return true;
+  if (isOwner(user)) return true;
   const [s] = await db.select().from(segments).where(eq(segments.id, segmentId));
   return Boolean(s && s.ownerId === user.hubspotOwnerId);
 }
 
 export async function registerSegment(formData: FormData) {
-  const user = await requireAdmin();
+  const user = await requireUser();
   const listId = str(formData, "listId");
   const ownerId = resolveOwner(user, formData);
   const startDate = str(formData, "startDate");
@@ -75,7 +76,7 @@ export async function registerSegment(formData: FormData) {
 }
 
 export async function updateSegment(formData: FormData) {
-  const user = await requireAdmin();
+  const user = await requireUser();
   const id = Number(formData.get("id"));
   const startDate = str(formData, "startDate");
   const campaignId = await resolveCampaignId(formData);
@@ -87,7 +88,7 @@ export async function updateSegment(formData: FormData) {
       campaignId,
       startDate,
       endDate: str(formData, "endDate"),
-      ...(user.role === "admin" && str(formData, "ownerId") ? { ownerId: str(formData, "ownerId")! } : {}),
+      ...(isOwner(user) && str(formData, "ownerId") ? { ownerId: str(formData, "ownerId")! } : {}),
     })
     .where(eq(segments.id, id));
   try {
@@ -99,7 +100,7 @@ export async function updateSegment(formData: FormData) {
 }
 
 export async function deleteSegment(formData: FormData) {
-  const user = await requireAdmin();
+  const user = await requireUser();
   const id = Number(formData.get("id"));
   if (!id || !(await canEdit(user, id))) return;
   await db.delete(segments).where(eq(segments.id, id));
