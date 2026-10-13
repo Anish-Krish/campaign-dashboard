@@ -580,15 +580,26 @@ function Drawer({ state, onClose, props }: { state: DrawerState; onClose: () => 
       </>
     );
   } else if (state.kind === "meetings") {
-    title = props.cohort ? "Meetings set this period" : "Deals this period";
+    // Exactly the deals behind the tile: booked in the period, with a meeting.
+    // Deals created with no meeting found are listed separately below.
+    const booked = props.bookings.filter((b) => b.bookedOn >= props.range.startDate && b.bookedOn <= props.range.endDate);
+    const set = booked.filter((b) => b.meetingStatus !== "no_meeting");
+    const noMeeting = booked.filter((b) => b.meetingStatus === "no_meeting");
+    title = `Meetings set · ${set.length}`;
     body = (
       <>
-        <Hint>
-          {props.cohort
-            ? "Every deal booked in this period, with what has happened to it since."
-            : "Booked in this period, plus earlier bookings that sat, became BANT, MQL or SQL in it."}
-        </Hint>
-        <BookingList rows={props.bookings} empty="No BDR deals in this period." />
+        <Hint>BDR deals booked in this period that have a meeting, with what has happened to each since.</Hint>
+        <BookingList rows={set} empty="No meetings set in this period." />
+        {noMeeting.length > 0 && (
+          <div className="mt-6">
+            <div className="eyebrow mb-1">Deal created, no meeting found · {noMeeting.length}</div>
+            <Hint>
+              Not counted as meetings set: there&apos;s no meeting on the deal, its contacts or its company in HubSpot. Log
+              the meeting (or associate it to the deal) and it counts on the next sync.
+            </Hint>
+            <BookingList rows={noMeeting} empty="" />
+          </div>
+        )}
       </>
     );
   } else if (state.kind === "shows") {
