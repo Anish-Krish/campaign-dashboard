@@ -171,7 +171,12 @@ const MEETING_PROPS = [
 // BDR by definition (per the user) — anything else stays unclassified and is
 // left off the Team page.
 const BDR_SOURCES = new Set(["ZoomInfo", "6Sense"]);
+// Source "Web Visitors" = a website visitor (cookie / visitor ID) a BDR
+// prospected and booked — BDR output even though HubSpot's Source Group
+// workflow files it under Marketing (per the user).
+const ALWAYS_BDR_SOURCES = new Set(["Web Visitors"]);
 function effectiveSourceGroup(p: { source_group?: string; source?: string }): string | null {
+  if (p.source && ALWAYS_BDR_SOURCES.has(p.source)) return "BDR";
   if (p.source_group) return p.source_group;
   return p.source && BDR_SOURCES.has(p.source) ? "BDR" : null;
 }
