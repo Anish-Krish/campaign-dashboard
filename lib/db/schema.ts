@@ -389,7 +389,18 @@ export const users = pgTable("users", {
   hubspotOwnerId: text("hubspot_owner_id"),
   email: text("email"), // where win notifications go (every active login with an email)
   active: boolean("active").notNull().default(true),
+  // sessions issued before this are rejected — set on a password change,
+  // deactivation or role change so old sign-ins stop working at once
+  sessionsValidAfter: timestamp("sessions_valid_after"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// Failed sign-ins, for lockout (too many in 15 minutes per username or IP).
+export const loginFailures = pgTable("login_failures", {
+  id: serial("id").primaryKey(),
+  username: text("username").notNull(),
+  ip: text("ip"),
+  at: timestamp("at").notNull().defaultNow(),
 });
 
 // --- Live feed ------------------------------------------------------------------

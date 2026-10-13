@@ -31,7 +31,7 @@ async function hmac(message: string): Promise<string> {
 }
 
 export type SessionRole = "admin" | "bdr";
-export type SessionClaims = { userId: number; role: SessionRole };
+export type SessionClaims = { userId: number; role: SessionRole; issuedAt?: number };
 
 // Token = "<userId>-<role>-<expiresAt>.<hmac>". The role rides in the signed
 // payload so proxy.ts can gate admin-only pages without a DB lookup; server
@@ -51,6 +51,14 @@ export async function verifySessionToken(token: string | undefined): Promise<Ses
   const [userId, role, expiresAt] = payload.split("-");
   if (!userId || (role !== "admin" && role !== "bdr") || Number(expiresAt) < Date.now()) return null;
   const expectedSig = await hmac(payload);
-  if (sig !== expectedSig) return null;
-  return { userId: Number(userId), role };
+  if (!safeEqual(sig, expectedSig)) return null;
+  return { userId: Number(userId), role, issuedAt: Number(expiresAt) - SESSION_TTL_MS };
+}
+
+// Constant-time compare, so a signature can't be guessed byte by byte from timing.
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }

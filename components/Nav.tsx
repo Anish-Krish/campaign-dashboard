@@ -1,14 +1,14 @@
 import Link from "next/link";
 import { logout } from "@/app/logout/actions";
-import { getCurrentUser } from "@/lib/session";
+import { getCurrentUser, isOwner } from "@/lib/session";
 import { NavLinks } from "@/components/NavLinks";
 import { LogoMark } from "@/components/LogoMark";
 
 // Role-aware: BDR logins see Team + Segments + their account; admins also see
-// the archived legacy views, Enrichment and Settings (proxy.ts enforces it).
+// the archived legacy views, Enrichment and Settings — owner only (requireAdmin enforces it).
 export async function Nav() {
   const user = await getCurrentUser();
-  const isAdmin = user?.role === "admin";
+  const isAdmin = isOwner(user);
   const links = [
     { href: "/team", label: "Performance" },
     { href: "/segments", label: "Segments" },

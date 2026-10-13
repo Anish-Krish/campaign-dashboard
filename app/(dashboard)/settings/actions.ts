@@ -98,16 +98,21 @@ export async function updateUser(formData: FormData) {
   const id = Number(formData.get("id"));
   if (!id) return;
   const password = str(formData, "password");
+  const active = id === admin.id ? true : formData.get("active") === "on";
+  const role = id === admin.id ? "admin" : str(formData, "role") === "admin" ? "admin" : "bdr";
+  const [before] = await db.select().from(users).where(eq(users.id, id));
+  // a new password, deactivation or role change signs that person out everywhere
+  const signOut = id !== admin.id && (Boolean(password) || Boolean(before?.active && !active) || before?.role !== role);
   await db
     .update(users)
     .set({
       name: str(formData, "name") ?? undefined,
-      role: str(formData, "role") === "admin" ? "admin" : "bdr",
+      role, // the owner can't demote themselves
       hubspotOwnerId: str(formData, "hubspotOwnerId"),
       email: emailOf(formData),
-      // an admin can't lock themselves out
-      active: id === admin.id ? true : formData.get("active") === "on",
+      active, // the owner can't lock themselves out
       ...(password ? { passwordHash: await hashPassword(password) } : {}),
+      ...(signOut ? { sessionsValidAfter: new Date() } : {}),
     })
     .where(eq(users.id, id));
   revalidatePath("/settings");

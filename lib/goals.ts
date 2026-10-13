@@ -98,7 +98,4 @@ export function paceFraction(range: DateRange, today: string): number {
 }
 
 // Only the owner sets goals (per the user) — not other admins or reps.
-export const GOAL_OWNER_USERNAME = "anish";
-export function canEditGoals(user: { username: string; role: string } | null | undefined) {
-  return user?.role === "admin" && user.username === GOAL_OWNER_USERNAME;
-}
+export { isOwner as canEditGoals } from "@/lib/session";

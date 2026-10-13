@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { bdrCampaigns, segments } from "@/lib/db/schema";
-import { requireAdmin, requireUser, type CurrentUser } from "@/lib/session";
+import { requireAdmin, type CurrentUser } from "@/lib/session";
 import { getListName } from "@/lib/hubspot";
 import { runSegmentSync } from "@/lib/segment-sync";
 
@@ -44,7 +44,7 @@ async function canEdit(user: CurrentUser, segmentId: number) {
 }
 
 export async function registerSegment(formData: FormData) {
-  const user = await requireUser();
+  const user = await requireAdmin();
   const listId = str(formData, "listId");
   const ownerId = resolveOwner(user, formData);
   const startDate = str(formData, "startDate");
@@ -75,7 +75,7 @@ export async function registerSegment(formData: FormData) {
 }
 
 export async function updateSegment(formData: FormData) {
-  const user = await requireUser();
+  const user = await requireAdmin();
   const id = Number(formData.get("id"));
   const startDate = str(formData, "startDate");
   const campaignId = await resolveCampaignId(formData);
@@ -99,7 +99,7 @@ export async function updateSegment(formData: FormData) {
 }
 
 export async function deleteSegment(formData: FormData) {
-  const user = await requireUser();
+  const user = await requireAdmin();
   const id = Number(formData.get("id"));
   if (!id || !(await canEdit(user, id))) return;
   await db.delete(segments).where(eq(segments.id, id));

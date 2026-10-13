@@ -1,4 +1,4 @@
-import { requireUser } from "@/lib/session";
+import { isOwner, requireUser } from "@/lib/session";
 import { PasswordForm } from "./PasswordForm";
 
 export const dynamic = "force-dynamic";
@@ -11,7 +11,13 @@ export default async function AccountPage() {
       <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
         {user.name} · <span style={{ color: "var(--text-muted)" }}>{user.username}</span> · {user.role === "admin" ? "Admin" : "BDR"}
       </p>
-      <PasswordForm />
+      {isOwner(user) ? (
+        <PasswordForm />
+      ) : (
+        <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+          Passwords are managed by Anish. Ask him if you need yours changed.
+        </p>
+      )}
     </div>
   );
 }

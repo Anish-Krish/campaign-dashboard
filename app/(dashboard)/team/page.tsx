@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { Suspense } from "react";
 import { desc, eq } from "drizzle-orm";
 import { GoalEditor } from "@/components/perf/GoalEditor";
 import { GoalProgress, Leaderboard, type LeaderRow } from "@/components/perf/Leaderboard";
@@ -35,7 +34,7 @@ import { db } from "@/lib/db";
 import { bdrCampaigns, syncRuns } from "@/lib/db/schema";
 import { todayInToronto } from "@/lib/timezone";
 import { activeReps, canEditGoals, getGoals, paceFraction } from "@/lib/goals";
-import { getCurrentUser } from "@/lib/session";
+import { getCurrentUser, isOwner } from "@/lib/session";
 import { saveGoals } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -432,7 +431,7 @@ export default async function TeamPage({
   }
 
   // --- Goals ------------------------------------------------------------------------
-  const isAdmin = user?.role === "admin";
+  const isAdmin = isOwner(user);
   const canSetGoals = canEditGoals(user);
   const repsInPeriod = activeReps(members, range);
   const pace = paceFraction(range, today);
