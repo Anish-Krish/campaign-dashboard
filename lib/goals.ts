@@ -96,3 +96,9 @@ export function paceFraction(range: DateRange, today: string): number {
   const d = (a: string, b: string) => (Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400000;
   return (d(range.startDate, today) + 1) / (d(range.startDate, range.endDate) + 1);
 }
+
+// Only the owner sets goals (per the user) — not other admins or reps.
+export const GOAL_OWNER_USERNAME = "anish";
+export function canEditGoals(user: { username: string; role: string } | null | undefined) {
+  return user?.role === "admin" && user.username === GOAL_OWNER_USERNAME;
+}

@@ -34,7 +34,7 @@ import {
 import { db } from "@/lib/db";
 import { bdrCampaigns, syncRuns } from "@/lib/db/schema";
 import { todayInToronto } from "@/lib/timezone";
-import { activeReps, getGoals, paceFraction } from "@/lib/goals";
+import { activeReps, canEditGoals, getGoals, paceFraction } from "@/lib/goals";
 import { getCurrentUser } from "@/lib/session";
 import { saveGoals } from "./actions";
 
@@ -433,6 +433,7 @@ export default async function TeamPage({
 
   // --- Goals ------------------------------------------------------------------------
   const isAdmin = user?.role === "admin";
+  const canSetGoals = canEditGoals(user);
   const repsInPeriod = activeReps(members, range);
   const pace = paceFraction(range, today);
   const daysLeft = range.endDate >= today && range.startDate <= today ? daysBetween(today, range.endDate) : null;
@@ -440,7 +441,7 @@ export default async function TeamPage({
   const repGoal = focusRep ? (goalSet.byRep.get(focusRep.hubspotOwnerId) ?? null) : null;
   const monthRange = view === "month" ? range : null;
   const editor =
-    isAdmin && monthRange ? (
+    canSetGoals && monthRange ? (
       <GoalEditor
         month={month}
         monthLabel={periodLabel}
@@ -638,12 +639,13 @@ export default async function TeamPage({
             pace={pace}
             daysLeft={daysLeft}
             editor={editor}
+            drill={{ name: "Team", bookings, attempts, range }}
             stats={[
-              { label: "Meetings set", value: String(t.meetingsBooked) },
-              { label: "Sat", value: String(t.sat) },
-              { label: "Show rate", value: t.showRate == null ? "—" : `${t.showRate}%` },
-              { label: "MQL", value: String(t.mqls) },
-              { label: "SQL", value: String(t.sqls) },
+              { label: "Meetings set", value: String(t.meetingsBooked), pick: "set" },
+              { label: "Sat", value: String(t.sat), pick: "sat" },
+              { label: "Show rate", value: t.showRate == null ? "—" : `${t.showRate}%`, pick: "show" },
+              { label: "MQL", value: String(t.mqls), pick: "mql" },
+              { label: "SQL", value: String(t.sqls), pick: "sql" },
               ...(showCommission ? [{ label: "Commission", value: money(teamCommission) }] : []),
             ]}
           />
@@ -651,9 +653,7 @@ export default async function TeamPage({
             rows={leaderRows}
             periodLabel={periodLabel}
             commissionNote={commissionNote}
-            bookings={bookings}
-            attempts={attempts}
-            range={range}
+            drill={{ name: "Team", bookings, attempts, range }}
           />
           </div>
           <div className="xl:sticky xl:top-20">

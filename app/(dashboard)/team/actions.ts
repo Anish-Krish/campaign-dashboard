@@ -8,6 +8,7 @@ import { requireAdmin, requireUser } from "@/lib/session";
 import { runSegmentSync } from "@/lib/segment-sync";
 import { runTeamSync } from "@/lib/team-sync";
 import { publishWins } from "@/lib/live";
+import { canEditGoals } from "@/lib/goals";
 
 // "Refresh" on the Performance page: pulls just the team data (calls, deals,
 // meeting outcomes, segments) — ~40s, vs. the full scheduled job. Any login
@@ -53,7 +54,8 @@ export async function refreshTeamData(): Promise<{ ok: boolean; error?: string }
 // Admin: a month's team BANT goal plus optional per-rep overrides. A blank
 // rep field means "even share of what's left" (the override row is removed).
 export async function saveGoals(fd: FormData): Promise<void> {
-  await requireAdmin();
+  const me = await requireAdmin();
+  if (!canEditGoals(me)) throw new Error("Only the owner can set goals");
   const month = String(fd.get("month") ?? "");
   if (!/^\d{4}-\d{2}$/.test(month)) throw new Error("bad month");
   const toTarget = (v: FormDataEntryValue | null) => {

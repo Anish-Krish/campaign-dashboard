@@ -19,6 +19,7 @@ export function GoalProgress({
   daysLeft,
   editor,
   stats,
+  drill,
 }: {
   eyebrow: string;
   actual: number;
@@ -26,8 +27,12 @@ export function GoalProgress({
   pace: number; // 0..1 share of the period elapsed
   daysLeft: number | null;
   editor?: React.ReactNode;
-  stats: { label: string; value: string }[];
+  stats: { label: string; value: string; pick?: PickWhat }[];
+  // the deals behind the stats: clicking a stat opens them
+  drill?: Drill;
 }) {
+  const [pick, setPick] = useState<PickWhat | null>(null);
+  const close = useCallback(() => setPick(null), []);
   const pct = target ? Math.min(100, (actual / target) * 100) : 0;
   const expected = target ? target * pace : 0;
   const hit = target != null && target > 0 && actual >= target;
@@ -115,20 +120,16 @@ export function GoalProgress({
             </>
           )}
         </div>
-        <div className="flex flex-col items-end gap-4">
-          {editor}
-          <div className="grid grid-cols-3 gap-x-6 gap-y-3 sm:grid-cols-5">
-            {stats.map((s) => (
-              <div key={s.label} className="text-right">
-                <div className="eyebrow">{s.label}</div>
-                <div className="mt-0.5 text-lg font-semibold" style={{ color: "var(--text-primary)" }}>
-                  {s.value}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+        {editor && <div className="flex flex-col items-end">{editor}</div>}
       </div>
+      {stats.length > 0 && (
+        <div className="relative mt-6 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+          {stats.map((st) => (
+            <StatTile key={st.label} label={st.label} value={st.value} onClick={st.pick && drill ? () => setPick(st.pick!) : undefined} />
+          ))}
+        </div>
+      )}
+      {pick && drill && <PickDrawer what={pick} who={{ name: drill.name }} onClose={close} drill={drill} />}
     </section>
   );
 }
@@ -192,7 +193,7 @@ function Mini({
   const Comp = onClick ? "button" : "div";
   return (
     <Comp
-      className={`text-right ${onClick ? "-m-1 rounded-md p-1 transition hover:bg-[var(--surface-2)]" : ""}`}
+      className={`text-right ${onClick ? "-m-1 cursor-pointer rounded-md p-1 transition hover:bg-[var(--accent-soft)] hover:shadow-[inset_0_0_0_1px_var(--accent)]" : ""}`}
       title={title}
       onClick={
         onClick &&
@@ -213,23 +214,47 @@ function Mini({
   );
 }
 
-type Pick = { row: LeaderRow; what: "set" | "sat" | "bant" | "mql" | "sql" };
+type PickWhat = "set" | "sat" | "show" | "bant" | "mql" | "sql";
+type Pick = { row: LeaderRow; what: PickWhat };
+// The period's deals / intro meetings ("when it happened") behind the numbers.
+export type Drill = {
+  name: string;
+  bookings: Booking[];
+  attempts: IntroAttempt[];
+  range: { startDate: string; endDate: string };
+};
+
+function StatTile({ label, value, onClick }: { label: string; value: string; onClick?: () => void }) {
+  const Comp = onClick ? "button" : "div";
+  return (
+    <Comp
+      onClick={onClick}
+      className={`rounded-xl px-4 py-3 text-left transition ${
+        onClick ? "cursor-pointer hover:-translate-y-px hover:shadow-[inset_0_0_0_1px_var(--accent)]" : ""
+      }`}
+      style={{ background: "var(--surface-2)" }}
+      title={onClick ? `Show the ${label.toLowerCase()} deals` : undefined}
+    >
+      <div className="text-[11px] font-medium uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+        {label}
+      </div>
+      <div className="mt-1 text-[22px] font-semibold leading-none tabular-nums" style={{ color: "var(--text-primary)" }}>
+        {value}
+      </div>
+    </Comp>
+  );
+}
 
 export function Leaderboard({
   rows,
   periodLabel,
   commissionNote,
-  bookings,
-  attempts,
-  range,
+  drill,
 }: {
   rows: LeaderRow[];
   periodLabel: string;
   commissionNote?: string | null;
-  // the period's deals / intro meetings ("when it happened"), for the drill-downs
-  bookings: Booking[];
-  attempts: IntroAttempt[];
-  range: { startDate: string; endDate: string };
+  drill: Drill;
 }) {
   const [pick, setPick] = useState<Pick | null>(null);
   const close = useCallback(() => setPick(null), []);
@@ -264,8 +289,8 @@ export function Leaderboard({
           return (
             <li key={r.ownerId} style={{ borderTop: "1px solid var(--gridline)" }}>
               <div
-                className="group relative grid grid-cols-[36px_1fr_auto] items-center gap-4 px-6 py-4 transition hover:bg-[var(--surface-2)] md:grid-cols-[36px_minmax(160px,1fr)_minmax(220px,1.3fr)_auto]"
-                style={leader ? { background: "linear-gradient(90deg, rgba(34,165,91,0.10), transparent 60%)" } : undefined}
+                className="group relative grid grid-cols-[36px_1fr_auto] items-center gap-4 px-6 py-4 transition hover:bg-[rgba(255,255,255,0.045)] hover:shadow-[inset_3px_0_0_var(--accent)] md:grid-cols-[36px_minmax(160px,1fr)_minmax(220px,1.3fr)_auto]"
+                style={leader ? { backgroundImage: "linear-gradient(90deg, rgba(34,165,91,0.10), transparent 60%)" } : undefined}
               >
                 {leader && (
                   <span className="absolute inset-y-0 left-0 w-[3px]" style={{ background: "var(--status-good)" }} aria-hidden />
@@ -301,7 +326,7 @@ export function Leaderboard({
                 {/* BANT + goal progress */}
                 <span className="col-span-3 flex items-center gap-4 md:col-span-1">
                   <button
-                    className="-m-1 w-[80px] rounded-md p-1 text-right transition hover:bg-[var(--surface-2)]"
+                    className="-m-1 w-[80px] cursor-pointer rounded-md p-1 text-right transition hover:bg-[var(--accent-soft)] hover:shadow-[inset_0_0_0_1px_var(--accent)]"
                     onClick={() => setPick({ row: r, what: "bant" })}
                     title="Show their BANT meetings"
                   >
@@ -361,51 +386,55 @@ export function Leaderboard({
           );
         })}
       </ol>
-      {pick && <PickDrawer pick={pick} onClose={close} bookings={bookings} attempts={attempts} range={range} />}
+      {pick && (
+        <PickDrawer what={pick.what} who={{ ownerId: pick.row.ownerId, name: pick.row.name }} onClose={close} drill={drill} />
+      )}
     </section>
   );
 }
 
-const PICK_INFO = {
+const PICK_INFO: Record<PickWhat, { label: string; hint: string }> = {
   set: { label: "Meetings set", hint: "Booked in this period, with a meeting." },
   sat: { label: "Meetings sat", hint: "Intro meetings that happened in this period, whenever they were booked." },
+  show: { label: "Show rate", hint: "Intro meetings in this period that sat, no-showed or were canceled (show rate = sat ÷ all three)." },
   bant: { label: "BANT", hint: "BANT box ticked in this period (what's paid on)." },
   mql: { label: "MQL", hint: "Entered Pre-Assessment / System Overview in this period." },
   sql: { label: "SQL", hint: "Entered the Sales Pipeline in this period." },
-} as const;
+};
 
 function PickDrawer({
-  pick,
+  what,
+  who,
   onClose,
-  bookings,
-  attempts,
-  range,
+  drill,
 }: {
-  pick: Pick;
+  what: PickWhat;
+  who: { ownerId?: string; name: string };
   onClose: () => void;
-  bookings: Booking[];
-  attempts: IntroAttempt[];
-  range: { startDate: string; endDate: string };
+  drill: Drill;
 }) {
-  const { row, what } = pick;
+  const { range } = drill;
   const inRange = (d: string | null) => d != null && d >= range.startDate && d <= range.endDate;
-  const mine = bookings.filter((b) => b.ownerId === row.ownerId);
+  const isWho = (ownerId: string) => !who.ownerId || ownerId === who.ownerId;
   const info = PICK_INFO[what];
   let body: React.ReactNode;
   let n: number;
-  if (what === "sat") {
-    const rows = attempts.filter((a) => a.ownerId === row.ownerId && a.result === "sat");
+  if (what === "sat" || what === "show") {
+    const results = what === "sat" ? ["sat"] : ["sat", "no_show", "canceled"];
+    const rows = drill.attempts.filter((a) => isWho(a.ownerId) && results.includes(a.result));
     n = rows.length;
-    body = <AttemptList rows={rows} empty="No meetings sat in this period." />;
+    body = <AttemptList rows={rows} empty="No intro meetings in this period." />;
   } else {
     const date = (b: Booking) =>
       what === "set" ? (b.meetingStatus === "no_meeting" ? null : b.bookedOn) : what === "bant" ? b.bantDate : what === "mql" ? b.mqlDate : b.sqlDate;
-    const rows = mine.filter((b) => inRange(date(b))).sort((a, b) => (date(b) ?? "").localeCompare(date(a) ?? ""));
+    const rows = drill.bookings
+      .filter((b) => isWho(b.ownerId) && inRange(date(b)))
+      .sort((a, b) => (date(b) ?? "").localeCompare(date(a) ?? ""));
     n = rows.length;
     body = <BookingList rows={rows} empty={`No ${info.label} in this period.`} />;
   }
   return (
-    <DrawerShell title={`${row.name} · ${info.label} · ${n}`} onClose={onClose}>
+    <DrawerShell title={`${who.name} · ${info.label} · ${n}`} onClose={onClose}>
       <Hint>{info.hint}</Hint>
       {body}
     </DrawerShell>
