@@ -367,6 +367,15 @@ const FLAG: Record<string, string> = {
   no_show_but_recorded: "Marked No-show / Canceled, but it was recorded",
 };
 
+// Meetings set, grouped by where each booking stands now (in this order).
+const SET_GROUPS: { key: string; label: string; statuses: string[]; dot: string }[] = [
+  { key: "held", label: "Held", statuses: ["held"], dot: "var(--status-good)" },
+  { key: "upcoming", label: "Upcoming", statuses: ["scheduled"], dot: "var(--accent)" },
+  { key: "outcome", label: "Needs outcome", statuses: ["not_logged"], dot: "var(--status-warning)" },
+  { key: "rebook", label: "No-show · rebook", statuses: ["needs_rebook"], dot: "var(--status-warning)" },
+  { key: "lost", label: "Lost", statuses: ["no_show_lost", "cancelled_lost"], dot: "var(--status-critical)" },
+];
+
 type StageKey = "bant" | "mql" | "sql";
 const STAGE_INFO: Record<StageKey, { title: string; date: (b: Booking) => string | null; hint: string }> = {
   bant: { title: "BANT", date: (b) => b.bantDate, hint: "BANT box ticked on the deal" },
@@ -588,8 +597,46 @@ function Drawer({ state, onClose, props }: { state: DrawerState; onClose: () => 
     title = `Meetings set · ${set.length}`;
     body = (
       <>
-        <Hint>BDR deals booked in this period that have a meeting, with what has happened to each since.</Hint>
-        <BookingList rows={set} empty="No meetings set in this period." />
+        <Hint>BDR deals booked in this period that have a meeting, grouped by what has happened to each since.</Hint>
+        {set.length === 0 ? (
+          <BookingList rows={set} empty="No meetings set in this period." />
+        ) : (
+          <>
+            <div className="mb-4 grid grid-cols-3 gap-2 sm:grid-cols-5">
+              {SET_GROUPS.map((g) => {
+                const n = set.filter((b) => g.statuses.includes(b.meetingStatus)).length;
+                return (
+                  <a
+                    key={g.key}
+                    href={n > 0 ? `#set-${g.key}` : undefined}
+                    className="rounded-lg p-2.5 text-center"
+                    style={{ background: "var(--surface-2)", opacity: n > 0 ? 1 : 0.5 }}
+                  >
+                    <div className="text-lg font-semibold tabular-nums" style={{ color: "var(--text-primary)" }}>
+                      {n}
+                    </div>
+                    <div className="flex items-center justify-center gap-1.5 text-[11px]" style={{ color: "var(--text-secondary)" }}>
+                      <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: g.dot }} aria-hidden />
+                      {g.label}
+                    </div>
+                  </a>
+                );
+              })}
+            </div>
+            {SET_GROUPS.map((g) => {
+              const rows = set.filter((b) => g.statuses.includes(b.meetingStatus));
+              if (rows.length === 0) return null;
+              return (
+                <div key={g.key} id={`set-${g.key}`} className="mb-4 scroll-mt-4">
+                  <div className="eyebrow mt-2">
+                    {g.label} · {rows.length}
+                  </div>
+                  <BookingList rows={rows} empty="" showWaiting={g.key === "rebook"} />
+                </div>
+              );
+            })}
+          </>
+        )}
         {noMeeting.length > 0 && (
           <div className="mt-6">
             <div className="eyebrow mb-1">Deal created, no meeting found · {noMeeting.length}</div>
