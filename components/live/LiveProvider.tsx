@@ -36,8 +36,10 @@ const WIN_KINDS = new Set(["meeting", "bant", "goal"]);
 
 type Toast = { key: number; e: FeedEvent };
 
-// Polls the live feed on every page: new wins play their sound, pop a toast
-// (BANT / goal: full-width banner + confetti) and refresh the numbers.
+// Polls the live feed on every page — in background tabs too, so a win's
+// sound plays whenever the dashboard is open anywhere (the browser may slow a
+// hidden tab's timer to about once a minute). The toast / banner + confetti
+// wait until the tab is visible again (hidden tabs don't animate), then play.
 export function LiveProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [events, setEvents] = useState<FeedEvent[]>([]);
@@ -50,6 +52,7 @@ export function LiveProvider({ children }: { children: React.ReactNode }) {
   const lastId = useRef(0);
   const primed = useRef(false);
   const soundRef = useRef(true);
+  const pendingVisuals = useRef<FeedEvent[]>([]);
 
   useEffect(() => {
     try {
@@ -81,6 +84,16 @@ export function LiveProvider({ children }: { children: React.ReactNode }) {
     if (v) unlockAudio();
   }, []);
 
+  const show = useCallback((e: FeedEvent) => {
+    if (e.kind === "bant" || e.kind === "goal") {
+      confetti(e.kind === "goal" ? 1.6 : 1);
+      setBanner(e);
+      setTimeout(() => setBanner((b) => (b?.id === e.id ? null : b)), 6000);
+    } else {
+      setToasts((t) => [...t, { key: e.id, e }]);
+    }
+  }, []);
+
   const celebrate = useCallback(
     (e: FeedEvent, mine: boolean) => {
       if (soundRef.current && !(e.kind === "chat" && mine)) playFor(e.kind);
@@ -88,15 +101,10 @@ export function LiveProvider({ children }: { children: React.ReactNode }) {
         if (!mine) setToasts((t) => [...t, { key: e.id, e }]);
         return;
       }
-      if (e.kind === "bant" || e.kind === "goal") {
-        confetti(e.kind === "goal" ? 1.6 : 1);
-        setBanner(e);
-        setTimeout(() => setBanner((b) => (b?.id === e.id ? null : b)), 6000);
-      } else {
-        setToasts((t) => [...t, { key: e.id, e }]);
-      }
+      if (document.visibilityState === "visible") show(e);
+      else pendingVisuals.current.push(e);
     },
-    [],
+    [show],
   );
 
   const poll = useCallback(async () => {
@@ -124,16 +132,20 @@ export function LiveProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     void poll();
-    const id = setInterval(() => {
-      if (document.visibilityState === "visible") void poll();
-    }, POLL_MS);
-    const onVisible = () => document.visibilityState === "visible" && void poll();
+    const id = setInterval(() => void poll(), POLL_MS);
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      // wins that landed while the tab was hidden: show them now (sound already played)
+      const queued = pendingVisuals.current.splice(0);
+      queued.forEach((e, i) => setTimeout(() => show(e), i * 900));
+      void poll();
+    };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       clearInterval(id);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [poll]);
+  }, [poll, show]);
 
   // toasts fade after 7s
   useEffect(() => {
