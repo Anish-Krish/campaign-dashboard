@@ -647,7 +647,14 @@ export default async function TeamPage({
               ...(showCommission ? [{ label: "Commission", value: money(teamCommission) }] : []),
             ]}
           />
-          <Leaderboard rows={leaderRows} periodLabel={periodLabel} commissionNote={commissionNote} />
+          <Leaderboard
+            rows={leaderRows}
+            periodLabel={periodLabel}
+            commissionNote={commissionNote}
+            bookings={bookings}
+            attempts={attempts}
+            range={range}
+          />
           </div>
           <div className="xl:sticky xl:top-20">
             <LiveFeed />

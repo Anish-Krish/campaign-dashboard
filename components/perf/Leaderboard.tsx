@@ -1,4 +1,9 @@
+"use client";
+
 import Link from "next/link";
+import { useCallback, useState } from "react";
+import type { Booking, IntroAttempt } from "@/lib/team-queries";
+import { AttemptList, BookingList, DrawerShell, Hint } from "./PerformanceView";
 
 // ---------------------------------------------------------------------------
 // Goal progress (team or one rep) — the hero at the top of the page
@@ -171,28 +176,63 @@ function Avatar({ name, leader }: { name: string; leader: boolean }) {
   );
 }
 
-function Mini({ label, value, title, accent }: { label: string; value: string; title?: string; accent?: boolean }) {
+function Mini({
+  label,
+  value,
+  title,
+  accent,
+  onClick,
+}: {
+  label: string;
+  value: string;
+  title?: string;
+  accent?: boolean;
+  onClick?: () => void;
+}) {
+  const Comp = onClick ? "button" : "div";
   return (
-    <div className="text-right" title={title}>
+    <Comp
+      className={`text-right ${onClick ? "-m-1 rounded-md p-1 transition hover:bg-[var(--surface-2)]" : ""}`}
+      title={title}
+      onClick={
+        onClick &&
+        ((e: React.MouseEvent) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onClick();
+        })
+      }
+    >
       <div className="text-[11px] uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
         {label}
       </div>
       <div className="text-[15px] font-semibold tabular-nums" style={{ color: accent ? "#5fd08f" : "var(--text-primary)" }}>
         {value}
       </div>
-    </div>
+    </Comp>
   );
 }
+
+type Pick = { row: LeaderRow; what: "set" | "sat" | "bant" | "mql" | "sql" };
 
 export function Leaderboard({
   rows,
   periodLabel,
   commissionNote,
+  bookings,
+  attempts,
+  range,
 }: {
   rows: LeaderRow[];
   periodLabel: string;
   commissionNote?: string | null;
+  // the period's deals / intro meetings ("when it happened"), for the drill-downs
+  bookings: Booking[];
+  attempts: IntroAttempt[];
+  range: { startDate: string; endDate: string };
 }) {
+  const [pick, setPick] = useState<Pick | null>(null);
+  const close = useCallback(() => setPick(null), []);
   // BANT meetings set decides the order (that's commission); ties go to more
   // meetings set, then more sat.
   const ranked = [...rows].sort(
@@ -223,8 +263,7 @@ export function Leaderboard({
           const hit = r.goal != null && r.goal > 0 && r.bant >= r.goal;
           return (
             <li key={r.ownerId} style={{ borderTop: "1px solid var(--gridline)" }}>
-              <Link
-                href={r.href}
+              <div
                 className="group relative grid grid-cols-[36px_1fr_auto] items-center gap-4 px-6 py-4 transition hover:bg-[var(--surface-2)] md:grid-cols-[36px_minmax(160px,1fr)_minmax(220px,1.3fr)_auto]"
                 style={leader ? { background: "linear-gradient(90deg, rgba(34,165,91,0.10), transparent 60%)" } : undefined}
               >
@@ -245,9 +284,14 @@ export function Leaderboard({
                 <span className="flex min-w-0 items-center gap-3">
                   <Avatar name={r.name} leader={leader} />
                   <span className="min-w-0">
-                    <span className="block truncate text-[15px] font-semibold group-hover:underline" style={{ color: "var(--text-primary)" }}>
+                    <Link
+                      href={r.href}
+                      className="block truncate text-[15px] font-semibold hover:underline"
+                      style={{ color: "var(--text-primary)" }}
+                      title="Open their full view"
+                    >
                       {r.name}
-                    </span>
+                    </Link>
                     <span className="block text-xs" style={{ color: leader ? "#5fd08f" : "var(--text-muted)" }}>
                       {leader ? "Leading" : `${r.dials.toLocaleString("en-US")} dials · ${r.conversations} convos`}
                     </span>
@@ -256,14 +300,18 @@ export function Leaderboard({
 
                 {/* BANT + goal progress */}
                 <span className="col-span-3 flex items-center gap-4 md:col-span-1">
-                  <span className="w-[72px] text-right">
+                  <button
+                    className="-m-1 w-[80px] rounded-md p-1 text-right transition hover:bg-[var(--surface-2)]"
+                    onClick={() => setPick({ row: r, what: "bant" })}
+                    title="Show their BANT meetings"
+                  >
                     <span className="text-[28px] font-bold leading-none tabular-nums" style={{ color: leader ? "#5fd08f" : "var(--text-primary)" }}>
                       {r.bant}
                     </span>
                     <span className="block text-[11px] uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
                       BANT
                     </span>
-                  </span>
+                  </button>
                   <span className="flex-1">
                     {r.goal != null ? (
                       <>
@@ -290,11 +338,11 @@ export function Leaderboard({
                 </span>
 
                 <span className={`col-span-3 grid gap-4 md:col-span-1 ${r.commission ? "grid-cols-6" : "grid-cols-5"}`}>
-                  <Mini label="Set" value={String(r.meetingsSet)} />
-                  <Mini label="Sat" value={String(r.sat)} />
+                  <Mini label="Set" value={String(r.meetingsSet)} onClick={() => setPick({ row: r, what: "set" })} />
+                  <Mini label="Sat" value={String(r.sat)} onClick={() => setPick({ row: r, what: "sat" })} />
                   <Mini label="Show" value={r.showRate == null ? "—" : `${r.showRate}%`} />
-                  <Mini label="MQL" value={String(r.mqls)} />
-                  <Mini label="SQL" value={String(r.sqls)} />
+                  <Mini label="MQL" value={String(r.mqls)} onClick={() => setPick({ row: r, what: "mql" })} />
+                  <Mini label="SQL" value={String(r.sqls)} onClick={() => setPick({ row: r, what: "sql" })} />
                   {r.commission && (
                     <Mini
                       label="Earned"
@@ -308,11 +356,58 @@ export function Leaderboard({
                     />
                   )}
                 </span>
-              </Link>
+              </div>
             </li>
           );
         })}
       </ol>
+      {pick && <PickDrawer pick={pick} onClose={close} bookings={bookings} attempts={attempts} range={range} />}
     </section>
+  );
+}
+
+const PICK_INFO = {
+  set: { label: "Meetings set", hint: "Booked in this period, with a meeting." },
+  sat: { label: "Meetings sat", hint: "Intro meetings that happened in this period, whenever they were booked." },
+  bant: { label: "BANT", hint: "BANT box ticked in this period (what's paid on)." },
+  mql: { label: "MQL", hint: "Entered Pre-Assessment / System Overview in this period." },
+  sql: { label: "SQL", hint: "Entered the Sales Pipeline in this period." },
+} as const;
+
+function PickDrawer({
+  pick,
+  onClose,
+  bookings,
+  attempts,
+  range,
+}: {
+  pick: Pick;
+  onClose: () => void;
+  bookings: Booking[];
+  attempts: IntroAttempt[];
+  range: { startDate: string; endDate: string };
+}) {
+  const { row, what } = pick;
+  const inRange = (d: string | null) => d != null && d >= range.startDate && d <= range.endDate;
+  const mine = bookings.filter((b) => b.ownerId === row.ownerId);
+  const info = PICK_INFO[what];
+  let body: React.ReactNode;
+  let n: number;
+  if (what === "sat") {
+    const rows = attempts.filter((a) => a.ownerId === row.ownerId && a.result === "sat");
+    n = rows.length;
+    body = <AttemptList rows={rows} empty="No meetings sat in this period." />;
+  } else {
+    const date = (b: Booking) =>
+      what === "set" ? (b.meetingStatus === "no_meeting" ? null : b.bookedOn) : what === "bant" ? b.bantDate : what === "mql" ? b.mqlDate : b.sqlDate;
+    const rows = mine.filter((b) => inRange(date(b))).sort((a, b) => (date(b) ?? "").localeCompare(date(a) ?? ""));
+    n = rows.length;
+    body = <BookingList rows={rows} empty={`No ${info.label} in this period.`} />;
+  }
+  return (
+    <DrawerShell title={`${row.name} · ${info.label} · ${n}`} onClose={onClose}>
+      <Hint>{info.hint}</Hint>
+      {body}
+    </DrawerShell>
   );
 }

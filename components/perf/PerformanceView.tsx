@@ -316,7 +316,7 @@ function missState(a: IntroAttempt): "rebook" | "rebooked" | "lost" | null {
   return "rebooked";
 }
 
-function AttemptList({ rows, empty }: { rows: IntroAttempt[]; empty: string }) {
+export function AttemptList({ rows, empty }: { rows: IntroAttempt[]; empty: string }) {
   if (rows.length === 0)
     return (
       <p className="py-10 text-center text-sm" style={{ color: "var(--text-muted)" }}>
@@ -510,11 +510,6 @@ export function BookingList({ rows, empty, showWaiting }: { rows: Booking[]; emp
 }
 
 function Drawer({ state, onClose, props }: { state: DrawerState; onClose: () => void; props: Props }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   const needsOutcome = props.attention.filter((b) => b.meetingStatus === "not_logged");
   const needsRebook = props.attention.filter((b) => b.meetingStatus === "needs_rebook");
@@ -734,6 +729,20 @@ function Drawer({ state, onClose, props }: { state: DrawerState; onClose: () => 
   }
 
   return (
+    <DrawerShell title={title} onClose={onClose}>
+      {body}
+    </DrawerShell>
+  );
+}
+
+// The slide-in panel every drill-down uses (Escape or the backdrop closes it).
+export function DrawerShell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
     <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label={title}>
       <button className="absolute inset-0 cursor-default" style={{ background: "rgba(0,0,0,0.5)" }} onClick={onClose} aria-label="Close" />
       <aside
@@ -748,13 +757,13 @@ function Drawer({ state, onClose, props }: { state: DrawerState; onClose: () => 
             ✕
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto px-6 py-4">{body}</div>
+        <div className="flex-1 overflow-y-auto px-6 py-4">{children}</div>
       </aside>
     </div>
   );
 }
 
-function Hint({ children }: { children: React.ReactNode }) {
+export function Hint({ children }: { children: React.ReactNode }) {
   return (
     <p className="mb-2 text-xs" style={{ color: "var(--text-muted)" }}>
       {children}
